@@ -1,14 +1,14 @@
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
+
+mod reader;
+
+macro_rules! TEST_DATA_PATH {
+    () => {
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/test_data/{}",
+        )
+    };
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub(crate) use TEST_DATA_PATH;
+ 
