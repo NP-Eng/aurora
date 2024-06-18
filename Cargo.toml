@@ -4,3 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+ark-circom = { version = "0.1.0" }
+
+[patch.crates-io]
+ark-circom = { git = "https://github.com/arkworks-rs/circom-compat" }
