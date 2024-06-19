@@ -4,14 +4,15 @@ use ark_ff::PrimeField;
 use ark_relations::r1cs::{ConstraintSystem, ConstraintSynthesizer};
 
 fn read_constraint_system<F: PrimeField>(r1cs_file: impl AsRef<Path>, wasm_file: impl AsRef<Path>) -> ConstraintSystem<F> {
+
     // Load the WASM and R1CS for witness and proof generation
     let cfg = CircomConfig::<F>::new(
         wasm_file, r1cs_file
     ).unwrap();
 
-    // Insert our public inputs as key value pairs
-    let builder = CircomBuilder::new(cfg);
-    let circom = builder.build().unwrap();
+    let builder = CircomBuilder::new(cfg);    
+    let circom = builder.setup();
+
     let cs = ConstraintSystem::<F>::new_ref();
     circom.generate_constraints(cs.clone()).unwrap();
     cs.into_inner().unwrap()
@@ -66,22 +67,41 @@ mod tests {
     }
 
     #[test]
-    fn test_read_sum_of_sqrts_r1cs() { 
+    fn test_read_sum_of_sqrts_r1cs() {
+        // Explanation:
+        // 
+        // The circuit, specificed in sum_of_sqrt.circom, contains the following
+        // constraints:
+        //    s1 * s1 = 5
+        //    s2 * s2 = 7
+        //    y = s1 + s2
+        // The output y is public (instance), whereas the other two advice
+        // signals are private (witness)
+        //
+        // The circom tooling automatically reduces the above constraints into an equivalent set:
+        //    s1 * s1 = 5
+        //    (y - s1) * (y - s1) = 7
+        // 
+        // The solution vector structure is (1, y, s1), and therefore the
+        // matrices capturing the R1CS are:
+        // A = (0,  0, 1)  B = (0,  0, 1)  C = (5, 0, 0)
+        //     (0, -1, 1)      (0, -1, 1)      (7, 0, 0)
+
         let r1cs = read_constraint_system::<Fr>(
             &format!(TEST_DATA_PATH!(), "sum_of_sqrt.r1cs"),
             &format!(TEST_DATA_PATH!(), "sum_of_sqrt.wasm")
         );
 
-        // println!("Read RC1S:\n{r1cs:?}");
+        println!("Read RC1S:\n{r1cs:?}");
         
-        // let matrices = r1cs.to_matrices().unwrap();
+        let matrices = r1cs.to_matrices().unwrap();
 
-        // println!("A:\n{}", matrices.a.iter().map(|row| format!("{row:?}")).join("\n\t"));
-        // println!("B:\n{}", matrices.b.iter().map(|row| format!("{row:?}")).join("\n\t"));
-        // println!("C:\n{}", matrices.c.iter().map(|row| format!("{row:?}")).join("\n\t"));
+        println!("A:\n\t{}", matrices.a.iter().map(|row| format!("{row:?}")).join("\n\t"));
+        println!("B:\n\t{}", matrices.b.iter().map(|row| format!("{row:?}")).join("\n\t"));
+        println!("C:\n\t{}", matrices.c.iter().map(|row| format!("{row:?}")).join("\n\t"));
 
-        // assert!(matrices.a == vec![vec![(-Fr::ONE, 2)]]);
-        // assert!(matrices.b == vec![vec![(Fr::ONE, 3)]]);
-        // assert!(matrices.c == vec![vec![(-Fr::ONE, 1)]]);
+        assert!(matrices.a == vec![vec![(Fr::ONE, 2)], vec![(Fr::ONE, 1), (-Fr::ONE, 2)]]);
+        assert!(matrices.b == vec![vec![(Fr::ONE, 2)], vec![(Fr::ONE, 1), (-Fr::ONE, 2)]]);
+        assert!(matrices.c == vec![vec![(Fr::from(5), 0)], vec![(Fr::from(7), 0)]])
     }
 }
