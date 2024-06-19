@@ -93,7 +93,11 @@ mod tests {
         );
 
         println!("Read RC1S:\n{r1cs:?}");
-        
+
+        println!("Num. constraints: {} ", r1cs.num_constraints);
+        println!("Num. instance entries: {} (includes 1)", r1cs.num_instance_variables);
+        println!("Num. witness entries: {}", r1cs.num_witness_variables);
+       
         let matrices = r1cs.to_matrices().unwrap();
 
         println!("A:\n\t{}", matrices.a.iter().map(|row| format!("{row:?}")).join("\n\t"));
