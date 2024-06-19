@@ -9,23 +9,21 @@ use crate::utils::{poly_div, poly_mul, sparse_matrix_by_vec};
 
 fn is_padded<F: PrimeField>(r1cs: &ConstraintSystem<F>) -> bool {
     let sol_len = r1cs.num_instance_variables + r1cs.num_witness_variables;
-    sol_len == r1cs.num_constraints && sol_len.is_power_of_two()
+    r1cs.num_instance_variables.is_power_of_two() && sol_len.is_power_of_two() && sol_len == r1cs.num_constraints
 }
 
 fn pad_r1cs<F: PrimeField>(r1cs: &mut ConstraintSystem<F>){
-    let sol_len = r1cs.num_instance_variables + r1cs.num_witness_variables;
-    
-    let padded_len = max(sol_len, r1cs.num_constraints).next_power_of_two();
-    
-    if sol_len == padded_len && r1cs.num_constraints == padded_len {
-        return;
-    }
 
-    let sol_pad = padded_len - sol_len;
-    let constraint_pad = padded_len - r1cs.num_constraints;
+    let padded_instance_len = r1cs.num_instance_variables.next_power_of_two();
+    let prepadded_sol_len = (padded_instance_len + r1cs.num_witness_variables).next_power_of_two();
+    
+    let padded_len = max(prepadded_sol_len, r1cs.num_constraints).next_power_of_two();
 
-    r1cs.num_witness_variables += sol_pad;
-    r1cs.num_constraints += constraint_pad;
+    r1cs.num_instance_variables = padded_instance_len;
+    r1cs.num_witness_variables += padded_len;
+    r1cs.num_constraints += padded_len;
+
+    r1cs.instance_assignment.resize(padded_instance_len, F::ZERO);
     r1cs.witness_assignment.resize(padded_len, F::ZERO);
     
     // TODO What to do about linear combinations? I think they have no place in
@@ -93,4 +91,6 @@ fn aurora_prove<F: PrimeField>(r1cs: ConstraintSystem<F>) {
 
     // Computing f_0 = (f_a * f_b - f_c) / v_h
     let f_0 = poly_div(&(&poly_mul(&f_a, &f_b) - &f_c), &v_h);
+
+
 }
