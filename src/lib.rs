@@ -1,5 +1,7 @@
 
+mod aurora;
 mod reader;
+mod utils;
 
 #[cfg(test)]
 macro_rules! TEST_DATA_PATH {
