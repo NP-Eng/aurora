@@ -1,4 +1,5 @@
-use ark_ff::PrimeField;
+use ark_crypto_primitives::sponge::{Absorb, CryptographicSponge};
+use ark_ff::{PrimeField, Zero};
 use ark_poly::{
     univariate::DensePolynomial, DenseUVPolynomial, EvaluationDomain, GeneralEvaluationDomain,
 };
@@ -73,14 +74,40 @@ fn aurora_setup<F: PrimeField>(r1cs: ConstraintSystem<F>) {
     // TODO Setup PCS here once we are generic over it
 }
 
-fn aurora_prove<F: PrimeField>(r1cs: ConstraintSystem<F>) {
+fn absorb_matrix<F: PrimeField + Absorb>(m: &Matrix<F>, sponge: &mut impl CryptographicSponge) {
+    // TODO check if generated matrices are deterministically ordered, otherwise
+    // sort them here
+    m.iter().for_each(|row| {
+        row.iter().for_each(|(v, i)| {
+            sponge.absorb(v);
+            sponge.absorb(i);
+        });
+    });
+}
+
+fn aurora_prove<F: PrimeField + Absorb>(
+    r1cs: ConstraintSystem<F>,
+    sponge: &mut impl CryptographicSponge,
+) {
     // TODO sanity checks, padding?
+    assert!(
+        is_padded(&r1cs),
+        "Received ConstraintSystem is nod padded. Please call pad_r1cs(r1cs) first."
+    );
 
     let matrices = r1cs.to_matrices().unwrap();
 
     let a = matrices.a;
     let b = matrices.b;
     let c = matrices.c;
+
+    // Initialising sponge with public parameters
+    sponge.absorb("Aurora".as_bytes());
+    sponge.absorb(&r1cs.num_instance_variables);
+    sponge.absorb(&r1cs.num_witness_variables);
+    absorb_matrix(&a, sponge);
+    absorb_matrix(&b, sponge);
+    absorb_matrix(&c, sponge);
 
     // Following the notation of the paper
     let n = r1cs.num_constraints; // = num_instance variables + num_witness_variables if padded
@@ -90,7 +117,6 @@ fn aurora_prove<F: PrimeField>(r1cs: ConstraintSystem<F>) {
     solution.extend(r1cs.witness_assignment.clone());
 
     // Note we can't compute f_a * f_b using an iFFT
-
     let f_a = matrix_polynomial(&a, &solution, &h);
     let f_b = matrix_polynomial(&b, &solution, &h);
     let f_c = matrix_polynomial(&c, &solution, &h);
@@ -102,11 +128,13 @@ fn aurora_prove<F: PrimeField>(r1cs: ConstraintSystem<F>) {
     let v_h = DensePolynomial::from_coefficients_vec(v_h_coeffs);
 
     // Computing f_0 = (f_a * f_b - f_c) / v_h
-    let f_0 = poly_div(&(&poly_mul(&f_a, &f_b) - &f_c), &v_h);
+    let f_0 = &(&(&f_a * &f_b) - &f_c) / &v_h;
 
     // TODO think about whether there is a more efficient way to compute this
     let mut v_coeffs = r1cs.instance_assignment.clone();
     v_coeffs.resize(solution.len(), F::ZERO);
+
+    let f_w = DensePolynomial::<F>::zero(); // TODO Confirm with Giacomo
 }
 
 #[cfg(test)]
@@ -209,7 +237,7 @@ mod tests {
         ];
 
         // Solution vector: (1, a1, a2, b1, b2 | c, a2c)
-        //                   ------ ins ------ | - wit -
+        //                  ------- ins ------ | - wit -
         //
         // R1CS:
         // A*z  (·) B*z = C*z

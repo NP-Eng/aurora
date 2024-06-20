@@ -9,6 +9,7 @@ ark-ff = { version = "^0.4.0", default-features = false }
 ark-circom = { version = "0.1.0" }
 ark-poly = { version = "^0.4.0", default-features = false }
 ark-relations = { version = "^0.4.0", default-features = false }
+ark-crypto-primitives = { version = "^0.4.0", default-features = false, features = ["sponge"]  }
 itertools = "0.10.0"
 
 [dev-dependencies]
@@ -20,3 +21,4 @@ ark-ff = { git = "https://github.com/arkworks-rs/algebra/" }
 ark-circom = { git = "https://github.com/HungryCatsStudio/circom-compat" }
 ark-relations = { git = "https://github.com/arkworks-rs/snark" }
 ark-poly = { git = "https://github.com/arkworks-rs/algebra/" }
+ark-crypto-primitives = { git = "https://github.com/arkworks-rs/crypto-primitives" }
