@@ -1,12 +1,12 @@
 
 In order to generate an `.r1cs` file from a `.circom` one (with name, say, `NAME`), use
 ```
-    circom -f NAME.circom --r1cs
+    circom NAME.circom --r1cs
 ```
 
 In order to generate a `.wasm` file from a `.circom` one, use
 ```
-    circom -f NAME.circom --wasm
+    circom NAME.circom --wasm
 ```
 and take the `.wasm` file from within the newly created folder.
 
