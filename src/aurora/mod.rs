@@ -92,5 +92,7 @@ fn aurora_prove<F: PrimeField>(r1cs: ConstraintSystem<F>) {
     // Computing f_0 = (f_a * f_b - f_c) / v_h
     let f_0 = poly_div(&(&poly_mul(&f_a, &f_b) - &f_c), &v_h);
 
-
+    // TODO think about whether there is a more efficient way to compute this
+    let mut v_coeffs = r1cs.instance_assignment.clone();
+    v_coeffs.resize(solution.len(), F::ZERO);
 }
