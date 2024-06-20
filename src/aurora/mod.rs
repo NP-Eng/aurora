@@ -5,10 +5,25 @@ use ark_poly::{
 };
 use ark_relations::r1cs::{ConstraintSystem, LinearCombination, Matrix};
 use ark_std::cmp::max;
+use ark_poly_commit::PolynomialCommitment;
 
-use crate::utils::{poly_div, poly_mul, sparse_matrix_by_vec};
+use crate::utils::{powers, sparse_matrix_by_vec};
 
 // TODO add reference to appendix B
+
+struct AuroraProof<F, PCS>
+where
+    F: PrimeField + Absorb,
+    PCS: PolynomialCommitment<F, DensePolynomial<F>>
+{
+    com_f_a: PCS::Commitment,
+    com_f_b: PCS::Commitment,
+    com_f_c: PCS::Commitment,
+    com_f_0: PCS::Commitment,
+    com_f_w: PCS::Commitment,
+    com_g_1: PCS::Commitment,
+    com_g_2: PCS::Commitment,
+}
 
 pub(crate) fn is_padded<F: PrimeField>(r1cs: &ConstraintSystem<F>) -> bool {
     let sol_len = r1cs.num_instance_variables + r1cs.num_witness_variables;
@@ -61,6 +76,15 @@ fn matrix_polynomial<F: PrimeField>(
     DensePolynomial::from_coefficients_vec(domain.ifft(&evals))
 }
 
+fn random_matrix_polynomial<F: PrimeField>(
+    m: &Matrix<F>,
+    r: F,
+    domain: &GeneralEvaluationDomain<F>,
+) -> DensePolynomial<F> {
+    let evals = sparse_matrix_by_vec(m, z);
+    DensePolynomial::from_coefficients_vec(domain.ifft(&evals))
+}
+
 fn aurora_setup<F: PrimeField>(r1cs: ConstraintSystem<F>) {
     assert!(
         is_padded(&r1cs),
@@ -74,10 +98,22 @@ fn aurora_setup<F: PrimeField>(r1cs: ConstraintSystem<F>) {
     // TODO Setup PCS here once we are generic over it
 }
 
-fn absorb_matrix<F: PrimeField + Absorb>(m: &Matrix<F>, sponge: &mut impl CryptographicSponge) {
+fn absorb_matrix<F: PrimeField + Absorb>(
+    m: &Matrix<F>,
+    sponge: &mut impl CryptographicSponge,
+    label: &str,
+) {
     // TODO check if generated matrices are deterministically ordered, otherwise
     // sort them here
-    m.iter().for_each(|row| {
+    sponge.absorb(&label.as_bytes());
+
+    // Implementing domain separation to prevent collisions e.g. of the matrices
+    // 0 0 0                0 0 0
+    // 0 1 0       and      0 0 0
+    // 0 0 0                0 1 0
+
+    m.iter().enumerate().for_each(|(i, row)| {
+        sponge.absorb(&format!("row_{i}").as_bytes());
         row.iter().for_each(|(v, i)| {
             sponge.absorb(v);
             sponge.absorb(i);
@@ -85,10 +121,15 @@ fn absorb_matrix<F: PrimeField + Absorb>(m: &Matrix<F>, sponge: &mut impl Crypto
     });
 }
 
-fn aurora_prove<F: PrimeField + Absorb>(
-    r1cs: ConstraintSystem<F>,
+fn aurora_prove<F, PCS>
+(
+    r1cs: &ConstraintSystem<F>,
     sponge: &mut impl CryptographicSponge,
-) {
+)
+where
+    F: PrimeField + Absorb,
+    PCS: PolynomialCommitment<F, DensePolynomial<F>>,
+{
     // TODO sanity checks, padding?
     assert!(
         is_padded(&r1cs),
@@ -101,17 +142,20 @@ fn aurora_prove<F: PrimeField + Absorb>(
     let b = matrices.b;
     let c = matrices.c;
 
-    // Initialising sponge with public parameters
-    sponge.absorb("Aurora".as_bytes());
+    // 0. Initialising sponge with public parameters
+    sponge.absorb(&"Aurora".as_bytes());
     sponge.absorb(&r1cs.num_instance_variables);
     sponge.absorb(&r1cs.num_witness_variables);
-    absorb_matrix(&a, sponge);
-    absorb_matrix(&b, sponge);
-    absorb_matrix(&c, sponge);
+    absorb_matrix(&a, sponge, "A");
+    absorb_matrix(&b, sponge, "B");
+    absorb_matrix(&c, sponge, "C");
 
+    // 1. Constructing committed polynomials
     // Following the notation of the paper
     let n = r1cs.num_constraints; // = num_instance variables + num_witness_variables if padded
     let h = GeneralEvaluationDomain::new(n).unwrap();
+    // h_in = h^(n/k)
+    let h_in = GeneralEvaluationDomain::new(r1cs.num_instance_variables).unwrap();
 
     let mut solution = r1cs.instance_assignment.clone();
     solution.extend(r1cs.witness_assignment.clone());
@@ -122,26 +166,50 @@ fn aurora_prove<F: PrimeField + Absorb>(
     let f_c = matrix_polynomial(&c, &solution, &h);
 
     // Constructing v_h = x^n - 1
-    let mut v_h_coeffs = vec![F::ZERO; n + 1];
-    v_h_coeffs[0] = -F::ONE;
-    v_h_coeffs[n] = F::ONE;
-    let v_h = DensePolynomial::from_coefficients_vec(v_h_coeffs);
-
+    let v_h = DensePolynomial::from(h.vanishing_polynomial());
+    
     // Computing f_0 = (f_a * f_b - f_c) / v_h
     let f_0 = &(&(&f_a * &f_b) - &f_c) / &v_h;
 
     // TODO think about whether there is a more efficient way to compute this
-    let mut v_coeffs = r1cs.instance_assignment.clone();
-    v_coeffs.resize(solution.len(), F::ZERO);
+    let v = DensePolynomial::from_coefficients_vec(h_in.ifft(&r1cs.instance_assignment));
+    
+    let v_h_in = DensePolynomial::from(h_in.vanishing_polynomial());
 
     let f_w = DensePolynomial::<F>::zero(); // TODO Confirm with Giacomo
+
+    // commit to f_a, f_b, f_c, f_0,        f_w
+    // degrees   <n   <n   <n   < n - 1     ??
+
+    
+    // Randomising polinomial through a squeezed challenge
+    let r: F = sponge.squeeze_field_elements(1)[0];
+
+    // 3: Univariate sumcheck
+    let f_z = &f_w * &v_h_in + v;
+
+    // Computing [1, r, r^2, ... r^(n-1)]
+    let powers_of_r = powers(r, n);
+    let p_r = DensePolynomial::from_coefficients_vec(h.ifft(&powers_of_r));
+    
+    let q_ar = random_matrix_polynomial(&a, r, &h);
+    let q_br = random_matrix_polynomial(&b, r, &h);
+    let q_cr = random_matrix_polynomial(&c, r, &h);
+    
+    let u =                 &(&(&p_r * &f_a) - &(&q_ar * &f_z)) +
+            r.pow(n)      * &(&(&p_r * &f_b) - &(&q_br * &f_z)) +
+            r.pow(2 * n)  * &(&(&p_r * &f_c) - &(&q_cr * &f_z));
+
 }
+
+// TODO verifier: check degrees of committed polynomials!
 
 #[cfg(test)]
 mod tests {
     use crate::{aurora::pad_r1cs, reader::read_constraint_system, TEST_DATA_PATH};
     use ark_bn254::Fr;
     use ark_ff::PrimeField;
+    use ark_poly::{EvaluationDomain, GeneralEvaluationDomain};
     use ark_std::vec;
 
     fn to_sparse<F: PrimeField + From<i64>>(matrix: &Vec<Vec<i64>>) -> Vec<Vec<(F, usize)>> {
@@ -291,5 +359,16 @@ mod tests {
         compare_matrices(&padded_matrices.a, &to_sparse(&expected_padded_a));
         compare_matrices(&padded_matrices.b, &to_sparse(&expected_padded_b));
         compare_matrices(&padded_matrices.c, &to_sparse(&expected_padded_c));
+    }
+
+    #[test]
+    fn test_fft_consistency() {
+        let n = 1 << 8;
+        let k = 1 << 3;
+
+        let h = GeneralEvaluationDomain::<Fr>::new(n).unwrap();
+        let h_in = GeneralEvaluationDomain::<Fr>::new(k).unwrap();
+
+        assert_eq!(h_in.elements().into_iter().nth(1), h.elements().into_iter().nth(1 << 5));
     }
 }
