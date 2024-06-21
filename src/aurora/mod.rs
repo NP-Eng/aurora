@@ -1,7 +1,7 @@
 use ark_crypto_primitives::sponge::{Absorb, CryptographicSponge};
 use ark_ff::{PrimeField, Zero};
 use ark_poly::{
-    univariate::DensePolynomial, DenseUVPolynomial, EvaluationDomain, GeneralEvaluationDomain,
+    univariate::{DensePolynomial, SparsePolynomial}, DenseUVPolynomial, EvaluationDomain, GeneralEvaluationDomain,
 };
 use ark_relations::r1cs::{ConstraintSystem, LinearCombination, Matrix};
 use ark_std::cmp::max;
@@ -81,7 +81,9 @@ fn random_matrix_polynomial<F: PrimeField>(
     r: F,
     domain: &GeneralEvaluationDomain<F>,
 ) -> DensePolynomial<F> {
-    let evals = sparse_matrix_by_vec(m, z);
+    // TODO
+    let z = vec![F::one(); domain.size()];
+    let evals = sparse_matrix_by_vec(m, &z);
     DensePolynomial::from_coefficients_vec(domain.ifft(&evals))
 }
 
@@ -196,21 +198,47 @@ where
     let q_br = random_matrix_polynomial(&b, r, &h);
     let q_cr = random_matrix_polynomial(&c, r, &h);
     
-    let u =                 &(&(&p_r * &f_a) - &(&q_ar * &f_z)) +
-            r.pow(n)      * &(&(&p_r * &f_b) - &(&q_br * &f_z)) +
-            r.pow(2 * n)  * &(&(&p_r * &f_c) - &(&q_cr * &f_z));
+    // TODO consider adding assert/error check before that n (the number of
+    // rows/cols fits into a u64)
+    let r_pow_n = r.pow([n as u64]);
+    
+    let u = (&(&p_r * &f_a) - &(&q_ar * &f_z)) +
+            &(&(&p_r * &f_b) - &(&q_br * &f_z)) *  r_pow_n +
+            &(&(&p_r * &f_c) - &(&q_cr * &f_z)) * (r_pow_n * r_pow_n);
 
+    // R Euclidean domain
+    // gamma, alpha, beta fixed
+    // alpha, beta coprime
+    // gamma = alpha * x + beta * y
+    // Find x_0, y_0 such that 1 = gcd(alpha, beta) = alpha * x_0 + beta * y_0
+    // Have solution (gamma * x_0, gamma * y_0)
+
+    // In this case, we need to find x_0, y_0 such that 1 = v_h * x_0 + x * y_0
+    // v_h = x^n - 1
+    // x_0 = -1, y_0 = x^(n - 1)
+
+    // alpha = -1 * u
+    // beta = x^(n - 1) * u
+
+    let g_1 = -u.clone();
+    let g_2 = &DensePolynomial::from(SparsePolynomial::from_coefficients_vec(vec![(n - 1, F::ONE)])) * &u;
+
+    // TODO remove
+    assert_eq!(u, &v_h * &g_1 + &g_2 * &DensePolynomial::from(SparsePolynomial::from_coefficients_vec(vec![(1, F::ONE)])));
 }
 
 // TODO verifier: check degrees of committed polynomials!
 
 #[cfg(test)]
 mod tests {
-    use crate::{aurora::pad_r1cs, reader::read_constraint_system, TEST_DATA_PATH};
+    use crate::{aurora::pad_r1cs, reader::read_constraint_system, utils::test_sponge, TEST_DATA_PATH};
     use ark_bn254::Fr;
+    use ark_crypto_primitives::sponge::{poseidon::PoseidonSponge, CryptographicSponge};
     use ark_ff::PrimeField;
     use ark_poly::{EvaluationDomain, GeneralEvaluationDomain};
     use ark_std::vec;
+
+    use super::aurora_prove;
 
     fn to_sparse<F: PrimeField + From<i64>>(matrix: &Vec<Vec<i64>>) -> Vec<Vec<(F, usize)>> {
         matrix
@@ -370,5 +398,21 @@ mod tests {
         let h_in = GeneralEvaluationDomain::<Fr>::new(k).unwrap();
 
         assert_eq!(h_in.elements().into_iter().nth(1), h.elements().into_iter().nth(1 << 5));
+    }
+
+    #[test]
+    fn test_prove() {
+        let r1cs = read_constraint_system::<Fr>(
+            &format!(TEST_DATA_PATH!(), "padding_test.r1cs"),
+            &format!(TEST_DATA_PATH!(), "padding_test.wasm"),
+        );
+
+        let mut padded_r1cs = r1cs.clone();
+
+        pad_r1cs(&mut padded_r1cs);
+
+        let mut sponge = test_sponge();
+
+        aurora_prove::<F>(&padded_r1cs, &mut sponge);
     }
 }
