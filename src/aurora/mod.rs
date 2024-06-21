@@ -1,4 +1,4 @@
-use ark_std::{collections::HashMap, hash::Hash};
+use ark_std::{collections::HashMap, hash::Hash, test_rng};
 
 use ark_crypto_primitives::sponge::{Absorb, CryptographicSponge};
 use ark_ff::PrimeField;
@@ -185,9 +185,10 @@ where
     let z_sub_v_star = DensePolynomial::from_coefficients_vec(h.ifft(&zero_padded_witness));
 
     // TODO: Is there a more efficient way to compute this?
-    let v_h_in = (0..r1cs.num_instance_variables)
-        .zip(h.elements().into_iter())
-        .map(|(i, zeta)| vec![(i, zeta), (0, -F::ONE)])
+    let v_h_in = h
+        .elements()
+        .take(r1cs.num_instance_variables)
+        .map(|zeta| vec![(1, F::ONE), (0, -zeta)])
         .map(SparsePolynomial::from_coefficients_vec)
         .map(DensePolynomial::from)
         .reduce(|acc, p| &acc * &p)
@@ -613,7 +614,7 @@ mod tests {
             &format!(TEST_DATA_PATH!(), "padding_test.wasm"),
         );
 
-        let pp = TestUVLigero::<Fr>::setup(10, None, &mut test_rng()).unwrap();
+        let pp = TestUVLigero::<Fr>::setup(30, None, &mut test_rng()).unwrap();
 
         let (ck, vk) = TestUVLigero::<Fr>::trim(&pp, 0, 0, None).unwrap();
 
