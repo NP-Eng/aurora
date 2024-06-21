@@ -12,7 +12,7 @@ ark-relations = { version = "^0.4.0", default-features = false }
 ark-crypto-primitives = { version = "^0.4.0", default-features = false, features = ["sponge"] }
 ark-ec = { version = "^0.4.0", default-features = false }
 ark-serialize = { version = "^0.4.0", default-features = false, features = ["derive"] }
-ark-poly-commit = { version = "^0.4.0", default-features = false }
+ark-poly-commit = { version = "^0.4.0", default-features = false, features = ["test-types"] }
 itertools = "0.10.0"
 
 [dev-dependencies]
@@ -31,3 +31,7 @@ ark-groth16 = { git = "https://github.com/arkworks-rs/groth16" }
 ark-poly-commit = { git = "https://github.com/HungryCatsStudio/poly-commit" }
 
 ark-bn254 = { git = "https://github.com/arkworks-rs/algebra/" }
+
+[features]
+default = [ "std"]
+std = [ "ark-ff/std", "ark-ec/std", "ark-poly/std", "ark-std/std", "ark-relations/std", "ark-serialize/std", "ark-crypto-primitives/std", "ark-poly-commit/std" ]

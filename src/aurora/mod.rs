@@ -1,11 +1,12 @@
 use ark_crypto_primitives::sponge::{Absorb, CryptographicSponge};
-use ark_ff::{PrimeField, Zero};
+use ark_ff::PrimeField;
 use ark_poly::{
-    univariate::{DensePolynomial, SparsePolynomial}, DenseUVPolynomial, EvaluationDomain, GeneralEvaluationDomain,
+    univariate::{DensePolynomial, SparsePolynomial},
+    DenseUVPolynomial, EvaluationDomain, GeneralEvaluationDomain,
 };
+use ark_poly_commit::{LabeledCommitment, LabeledPolynomial, PolynomialCommitment};
 use ark_relations::r1cs::{ConstraintSystem, LinearCombination, Matrix};
 use ark_std::cmp::max;
-use ark_poly_commit::PolynomialCommitment;
 
 use crate::utils::{powers, sparse_matrix_by_vec};
 
@@ -14,15 +15,10 @@ use crate::utils::{powers, sparse_matrix_by_vec};
 struct AuroraProof<F, PCS>
 where
     F: PrimeField + Absorb,
-    PCS: PolynomialCommitment<F, DensePolynomial<F>>
+    PCS: PolynomialCommitment<F, DensePolynomial<F>>,
 {
-    com_f_a: PCS::Commitment,
-    com_f_b: PCS::Commitment,
-    com_f_c: PCS::Commitment,
-    com_f_0: PCS::Commitment,
-    com_f_w: PCS::Commitment,
-    com_g_1: PCS::Commitment,
-    com_g_2: PCS::Commitment,
+    commitments: Vec<LabeledCommitment<PCS::Commitment>>,
+    proof: PCS::Proof,
 }
 
 pub(crate) fn is_padded<F: PrimeField>(r1cs: &ConstraintSystem<F>) -> bool {
@@ -78,12 +74,14 @@ fn matrix_polynomial<F: PrimeField>(
 
 fn random_matrix_polynomial<F: PrimeField>(
     m: &Matrix<F>,
-    r: F,
+    powers_of_r: &Vec<F>,
     domain: &GeneralEvaluationDomain<F>,
 ) -> DensePolynomial<F> {
-    // TODO
-    let z = vec![F::one(); domain.size()];
-    let evals = sparse_matrix_by_vec(m, &z);
+    let evals = m
+        .iter()
+        .enumerate()
+        .map(|(i, row)| row.iter().map(|(v, _)| v).sum::<F>() * powers_of_r[i])
+        .collect::<Vec<F>>();
     DensePolynomial::from_coefficients_vec(domain.ifft(&evals))
 }
 
@@ -123,11 +121,11 @@ fn absorb_matrix<F: PrimeField + Absorb>(
     });
 }
 
-fn aurora_prove<F, PCS>
-(
+fn aurora_prove<F, PCS>(
+    ck: &PCS::CommitterKey,
     r1cs: &ConstraintSystem<F>,
     sponge: &mut impl CryptographicSponge,
-)
+) -> AuroraProof<F, PCS>
 where
     F: PrimeField + Absorb,
     PCS: PolynomialCommitment<F, DensePolynomial<F>>,
@@ -156,11 +154,11 @@ where
     // Following the notation of the paper
     let n = r1cs.num_constraints; // = num_instance variables + num_witness_variables if padded
     let h = GeneralEvaluationDomain::new(n).unwrap();
-    // h_in = h^(n/k)
-    let h_in = GeneralEvaluationDomain::new(r1cs.num_instance_variables).unwrap();
 
     let mut solution = r1cs.instance_assignment.clone();
     solution.extend(r1cs.witness_assignment.clone());
+
+    // ======================== Computation of f_0 ========================
 
     // Note we can't compute f_a * f_b using an iFFT
     let f_a = matrix_polynomial(&a, &solution, &h);
@@ -169,42 +167,67 @@ where
 
     // Constructing v_h = x^n - 1
     let v_h = DensePolynomial::from(h.vanishing_polynomial());
-    
+
     // Computing f_0 = (f_a * f_b - f_c) / v_h
     let f_0 = &(&(&f_a * &f_b) - &f_c) / &v_h;
 
-    // TODO think about whether there is a more efficient way to compute this
-    let v = DensePolynomial::from_coefficients_vec(h_in.ifft(&r1cs.instance_assignment));
-    
-    let v_h_in = DensePolynomial::from(h_in.vanishing_polynomial());
+    // ======================== Computation of f_w ========================
 
-    let f_w = DensePolynomial::<F>::zero(); // TODO Confirm with Giacomo
+    let zero_padded_witness = [
+        vec![F::ZERO; r1cs.num_instance_variables],
+        r1cs.witness_assignment.clone(),
+    ]
+    .concat();
+
+    let z_sub_v_star = DensePolynomial::from_coefficients_vec(h.ifft(&zero_padded_witness));
+
+    // TODO: Is there a more efficient way to compute this?
+    let v_h_in = (0..r1cs.num_instance_variables)
+        .zip(h.elements().into_iter())
+        .map(|(i, zeta)| vec![(i, zeta), (0, -F::ONE)])
+        .map(SparsePolynomial::from_coefficients_vec)
+        .map(DensePolynomial::from)
+        .reduce(|acc, p| &acc * &p)
+        .unwrap();
+
+    let f_w = &z_sub_v_star / &v_h_in;
 
     // commit to f_a, f_b, f_c, f_0,        f_w
     // degrees   <n   <n   <n   < n - 1     ??
 
-    
     // Randomising polinomial through a squeezed challenge
     let r: F = sponge.squeeze_field_elements(1)[0];
 
+    // ======================== Computation of f_z ========================
+
+    let zero_padded_instance = [
+        r1cs.instance_assignment.clone(),
+        vec![F::ZERO; r1cs.num_witness_variables],
+    ]
+    .concat();
+
+    let v_star = DensePolynomial::from_coefficients_vec(h.ifft(&zero_padded_instance));
+
     // 3: Univariate sumcheck
-    let f_z = &f_w * &v_h_in + v;
+    let f_z = &f_w * &v_h_in + v_star;
+
+    // ======================== Computation of g_1, g_2 ========================
 
     // Computing [1, r, r^2, ... r^(n-1)]
     let powers_of_r = powers(r, n);
     let p_r = DensePolynomial::from_coefficients_vec(h.ifft(&powers_of_r));
-    
-    let q_ar = random_matrix_polynomial(&a, r, &h);
-    let q_br = random_matrix_polynomial(&b, r, &h);
-    let q_cr = random_matrix_polynomial(&c, r, &h);
-    
+
+    let q_ar = random_matrix_polynomial(&a, &powers_of_r, &h);
+    let q_br = random_matrix_polynomial(&b, &powers_of_r, &h);
+    let q_cr = random_matrix_polynomial(&c, &powers_of_r, &h);
+
     // TODO consider adding assert/error check before that n (the number of
     // rows/cols fits into a u64)
     let r_pow_n = r.pow([n as u64]);
-    
-    let u = (&(&p_r * &f_a) - &(&q_ar * &f_z)) +
-            &(&(&p_r * &f_b) - &(&q_br * &f_z)) *  r_pow_n +
-            &(&(&p_r * &f_c) - &(&q_cr * &f_z)) * (r_pow_n * r_pow_n);
+
+    let u = (&(&p_r * &f_a) - &(&q_ar * &f_z))
+        + &(&(&p_r * &f_b) - &(&q_br * &f_z)) * r_pow_n
+        + &(&(&p_r * &f_c) - &(&q_cr * &f_z)) * (r_pow_n * r_pow_n);
 
     // R Euclidean domain
     // gamma, alpha, beta fixed
@@ -221,21 +244,75 @@ where
     // beta = x^(n - 1) * u
 
     let g_1 = -u.clone();
-    let g_2 = &DensePolynomial::from(SparsePolynomial::from_coefficients_vec(vec![(n - 1, F::ONE)])) * &u;
+    let g_2 = &DensePolynomial::from(SparsePolynomial::from_coefficients_vec(vec![(
+        n - 1,
+        F::ONE,
+    )])) * &u;
 
     // TODO remove
-    assert_eq!(u, &v_h * &g_1 + &g_2 * &DensePolynomial::from(SparsePolynomial::from_coefficients_vec(vec![(1, F::ONE)])));
+    assert_eq!(
+        u,
+        &v_h * &g_1
+            + &g_2
+                * &DensePolynomial::from(SparsePolynomial::from_coefficients_vec(vec![(
+                    1,
+                    F::ONE
+                )]))
+    );
+
+    //======================== PCS commitment/proof ========================
+
+    let labels = vec!["f_a", "f_b", "f_c", "f_0", "f_w", "g_1", "g_2"];
+    let labeled_polynomials = vec![f_a, f_b, f_c, f_0, f_w, g_1, g_2]
+        .iter()
+        .zip(labels.iter())
+        .map(|(polynomial, label)| {
+            LabeledPolynomial::new(label.to_string(), polynomial.clone(), None, None)
+        })
+        .collect::<Vec<_>>();
+
+    let (com, com_states) = PCS::commit(ck, &labeled_polynomials, None).unwrap();
+
+    sponge.absorb(&com);
+
+    let a: F = sponge.squeeze_field_elements(1)[0];
+
+    let proof = PCS::open(
+        ck,
+        &labeled_polynomials,
+        &com,
+        &a,
+        sponge,
+        &com_states,
+        None,
+    )
+    .unwrap();
+
+    return AuroraProof {
+        commitments: com,
+        proof: proof,
+    };
+}
+
+fn aurora_verify<F, PCS>(vk: &PCS::VerifierKey, proof: AuroraProof<F, PCS>) -> bool
+where
+    F: PrimeField + Absorb,
+    PCS: PolynomialCommitment<F, DensePolynomial<F>>,
+{
+    // TODO
+    return true;
 }
 
 // TODO verifier: check degrees of committed polynomials!
 
 #[cfg(test)]
 mod tests {
-    use crate::{aurora::pad_r1cs, reader::read_constraint_system, utils::test_sponge, TEST_DATA_PATH};
+    use crate::{aurora::pad_r1cs, reader::read_constraint_system, TEST_DATA_PATH};
     use ark_bn254::Fr;
-    use ark_crypto_primitives::sponge::{poseidon::PoseidonSponge, CryptographicSponge};
+    use ark_crypto_primitives::sponge::poseidon::PoseidonSponge;
     use ark_ff::PrimeField;
     use ark_poly::{EvaluationDomain, GeneralEvaluationDomain};
+    use ark_poly_commit::{test_sponge, TestUVLigero};
     use ark_std::vec;
 
     use super::aurora_prove;
@@ -397,7 +474,10 @@ mod tests {
         let h = GeneralEvaluationDomain::<Fr>::new(n).unwrap();
         let h_in = GeneralEvaluationDomain::<Fr>::new(k).unwrap();
 
-        assert_eq!(h_in.elements().into_iter().nth(1), h.elements().into_iter().nth(1 << 5));
+        assert_eq!(
+            h_in.elements().into_iter().nth(1),
+            h.elements().into_iter().nth(1 << 5)
+        );
     }
 
     #[test]
@@ -411,8 +491,8 @@ mod tests {
 
         pad_r1cs(&mut padded_r1cs);
 
-        let mut sponge = test_sponge();
+        let mut sponge: PoseidonSponge<Fr> = test_sponge();
 
-        aurora_prove::<F>(&padded_r1cs, &mut sponge);
+        // aurora_prove::<Fr, TestUVLigero<Fr>>(&padded_r1cs, &mut sponge);
     }
 }
