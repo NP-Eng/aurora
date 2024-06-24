@@ -125,8 +125,8 @@ fn absorb_matrix<F: PrimeField + Absorb>(
     sponge: &mut impl CryptographicSponge,
     label: &str,
 ) {
-    // TODO check if generated matrices are deterministically ordered, otherwise
-    // sort them here
+    // TODO If generated matrices are not deterministically ordered in the
+    // future, sort them from left to right sort them here
     sponge.absorb(&label.as_bytes());
 
     // Implementing domain separation to prevent collisions e.g. of the matrices
@@ -244,14 +244,13 @@ where
 
     let f_w = &z_minus_v_star / &v_h_in;
 
-    // commit to f_a, f_b, f_c, f_0,        f_w
-    // degrees   <n   <n   <n   < n - 1     ??
-
     // ======================== Computation of f_z ========================
 
     let f_z = DensePolynomial::from_coefficients_vec(h.ifft(&solution));
 
     // ======================== Computation of g_1, g_2 ========================
+
+    // TODO commit to the first five here and absorb the commitments
 
     // Randomising polinomial through a squeezed challenge
     let r: F = sponge.squeeze_field_elements(1)[0];
@@ -264,8 +263,6 @@ where
     let q_br = random_matrix_polynomial(&b, &powers_of_r, &h);
     let q_cr = random_matrix_polynomial(&c, &powers_of_r, &h);
 
-    // TODO consider adding assert/error check before that n (the number of
-    // rows/cols fits into a u64)
     let r_pow_n = r * powers_of_r[n - 1];
 
     let u = (&(&p_r * &f_a) - &(&q_ar * &f_z))
@@ -334,7 +331,6 @@ where
     };
 }
 
-// TODO verifier: check degrees of committed polynomials!
 fn aurora_verify<F, PCS>(
     vk: &PCS::VerifierKey,
     aurora_proof: AuroraProof<F, PCS>,
@@ -418,16 +414,13 @@ where
     // - v_h(a_point)?
     // f_0 = (f_a * f_b - f_c) / v_h
 
-    let v_h_in = h
+    let v_h_in_a: F = h
         .elements()
-        .take(r1cs.num_instance_variables) // 1, zeta, ..., zeta^(k-1)
-        .map(|c| vec![(1, F::ONE), (0, -c)]) // x - zeta^i
-        .map(SparsePolynomial::from_coefficients_vec)
-        .map(DensePolynomial::from)
-        .reduce(|acc, p| &acc * &p) // multiply together
-        .unwrap();
+        .take(r1cs.num_instance_variables)
+        .map(|c| a_point - c)
+        .product();
 
-    let f_z_a = *evals.get("f_w").unwrap() * v_h_in.evaluate(&a_point) + v_star.evaluate(&a_point);
+    let f_z_a = *evals.get("f_w").unwrap() * v_h_in_a + v_star.evaluate(&a_point);
 
     // Computing [1, r, r^2, ... r^(n-1)]
     let powers_of_r = powers(r, n);
@@ -438,8 +431,6 @@ where
     let q_br_a = random_matrix_polynomial(&b, &powers_of_r, &h).evaluate(&a_point);
     let q_cr_a = random_matrix_polynomial(&c, &powers_of_r, &h).evaluate(&a_point);
 
-    // TODO consider adding assert/error check before that n (the number of
-    // rows/cols fits into a u64)
     let r_pow_n = r * powers_of_r[n - 1];
 
     let u_a = (p_r_a * evals.get("f_a").unwrap() - q_ar_a * f_z_a)
