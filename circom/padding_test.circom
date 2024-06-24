@@ -5,6 +5,14 @@
   - Original witness length: 3
   - Smallest power of 2 geq 8 + 3: 16
   - Original number of constraints: 7 -> 16
+
+  Let v = (1, a1, a2, b1, b2) denote the instance vetor and
+  w = (c, a2c) the witness vector, both referring to the unpadded R1CS.
+  Then the circuit constrains the following:
+    - a2 = a1^2
+    - b2 = b1^2
+    - a2c = a2 * c
+    - 42 = b2 * a2c
 */
 
 template PaddingTest() {

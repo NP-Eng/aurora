@@ -35,3 +35,4 @@ ark-bn254 = { git = "https://github.com/arkworks-rs/algebra/" }
 [features]
 default = [ "std"]
 std = [ "ark-ff/std", "ark-ec/std", "ark-poly/std", "ark-std/std", "ark-relations/std", "ark-serialize/std", "ark-crypto-primitives/std", "ark-poly-commit/std" ]
+test-types = [ "ark-poly-commit/test-types" ]
