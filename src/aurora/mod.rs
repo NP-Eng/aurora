@@ -426,7 +426,6 @@ where
     let powers_of_r = powers(r, n);
     let p_r_a = DensePolynomial::from_coefficients_vec(h.ifft(&powers_of_r)).evaluate(&a_point);
 
-    // Computing [1, r, r^2, ... r^(n-1)]
     let q_ar_a = random_matrix_polynomial(&a, &powers_of_r, &h).evaluate(&a_point);
     let q_br_a = random_matrix_polynomial(&b, &powers_of_r, &h).evaluate(&a_point);
     let q_cr_a = random_matrix_polynomial(&c, &powers_of_r, &h).evaluate(&a_point);
