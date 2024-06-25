@@ -289,18 +289,21 @@ where
         + &(&(&p_r * &f_b) - &(&q_br * &f_z)) * r_pow_n
         + &(&(&p_r * &f_c) - &(&q_cr * &f_z)) * (r_pow_n * r_pow_n);
 
-    // We need to find x_0, y_0 such that 1 = v_h * x_0 + x * y_0 where
-    // v_h = x^n - 1
-    // x_0 = -1, y_0 = x^(n - 1)
-    // We have the following immediate solution:
-    // x_0 = -u
-    // y_0 = x^(n - 1) * u
+    // We construct g_1 and g_2 such that u = v_h * g_1 + x * g_2
 
-    let g_1 = -u.clone();
-    let g_2 = &DensePolynomial::from(SparsePolynomial::from_coefficients_vec(vec![(
+    // Auxiliary polynomials x and x^n - 1
+    let x = DensePolynomial::from(SparsePolynomial::from_coefficients_slice(&[(1, F::ONE)]));
+
+    let x_n_minus_1 = DensePolynomial::from(SparsePolynomial::from_coefficients_slice(&[(
         n - 1,
         F::ONE,
-    )])) * &u;
+    )]));
+
+    let dividend = &x_n_minus_1 * &u;
+
+    let (quotient, g_2) = dividend.divide_by_vanishing_poly(h).unwrap();
+
+    let g_1 = &(&quotient * &x) - &u;
 
     //==================== Committing to g_1, g_2 ====================
 
@@ -391,14 +394,14 @@ where
 
     // ======================== Zero test ========================
 
-    let h = GeneralEvaluationDomain::<F>::new(n).unwrap();
-
-    let v_h_a = h.evaluate_vanishing_polynomial(a_point);
-
     // Evaluations of the committed polynomials at a_point
     let [f_a_a, f_b_a, f_c_a, f_0_a, f_w_a, g_1_a, g_2_a] = evals[..] else {
         return false;
     };
+
+    let h = GeneralEvaluationDomain::<F>::new(n).unwrap();
+
+    let v_h_a = h.evaluate_vanishing_polynomial(a_point);
 
     if f_a_a * f_b_a - f_c_a != f_0_a * v_h_a {
         return false;
