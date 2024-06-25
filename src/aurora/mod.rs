@@ -3,7 +3,7 @@ use ark_std::{collections::HashMap, log2, rand::RngCore};
 use ark_crypto_primitives::sponge::{Absorb, CryptographicSponge};
 use ark_ff::PrimeField;
 use ark_poly::{
-    univariate::{DensePolynomial, SparsePolynomial},
+    univariate::{DenseOrSparsePolynomial, DensePolynomial, SparsePolynomial},
     DenseUVPolynomial, EvaluationDomain, GeneralEvaluationDomain, Polynomial,
 };
 use ark_poly_commit::{LabeledCommitment, LabeledPolynomial, PolynomialCommitment};
@@ -78,18 +78,14 @@ fn matrix_polynomial<F: PrimeField>(
     DensePolynomial::from_coefficients_vec(domain.ifft(&evals))
 }
 
-fn random_matrix_polynomial<F: PrimeField>(
+fn random_matrix_polynomial_evaluations<F: PrimeField>(
     m: &Matrix<F>,
     powers_of_r: &Vec<F>,
-    domain: &GeneralEvaluationDomain<F>,
-) -> DensePolynomial<F> {
-    let evals = m
-        .iter()
+) -> Vec<F> {
+    m.iter()
         .zip(powers_of_r.iter())
         .map(|(row, r_x)| *r_x * row.iter().map(|(v, _)| v).sum::<F>())
-        .collect::<Vec<F>>();
-
-    DensePolynomial::from_coefficients_vec(domain.ifft(&evals))
+        .collect::<Vec<F>>()
 }
 
 fn aurora_setup<F: PrimeField, PCS: PolynomialCommitment<F, DensePolynomial<F>>>(
@@ -169,6 +165,18 @@ fn absorb_public_parameters<F, PCS>(
     absorb_matrix(&c, sponge, "C");
 }
 
+fn label_polynomials<F: PrimeField>(
+    polynomials_and_labels: &[(&str, &DensePolynomial<F>)],
+) -> Vec<LabeledPolynomial<F, DensePolynomial<F>>> {
+    polynomials_and_labels
+        .iter()
+        .cloned()
+        .map(|(label, polynomial)| {
+            LabeledPolynomial::new(label.to_string(), polynomial.clone(), None, None)
+        })
+        .collect()
+}
+
 fn aurora_prove<F, PCS>(
     ck: &PCS::CommitterKey,
     vk: &PCS::VerifierKey,
@@ -228,17 +236,17 @@ where
     ]
     .concat();
 
+    let h_interpolate = |evals: &Vec<F>| DensePolynomial::from_coefficients_vec(h.ifft(&evals));
+
     // Numerator
-    let z_minus_v_star = DensePolynomial::from_coefficients_vec(h.ifft(&zero_padded_witness));
+    let z_minus_v_star = h_interpolate(&zero_padded_witness);
 
     // TODO: Is there a more efficient way to compute this?
     // Denominator v_h_in = (x - 1) * (x - zeta^1) * ... * (x - zeta^(k-1))
     let v_h_in = h
         .elements()
         .take(r1cs.num_instance_variables) // 1, zeta, ..., zeta^(k-1)
-        .map(|c| vec![(1, F::ONE), (0, -c)]) // x - zeta^i
-        .map(SparsePolynomial::from_coefficients_vec)
-        .map(DensePolynomial::from)
+        .map(|c| DensePolynomial::from_coefficients_slice(&[-c, F::ONE])) // x - zeta^i
         .reduce(|acc, p| &acc * &p) // multiply together
         .unwrap();
 
@@ -246,22 +254,34 @@ where
 
     // ======================== Computation of f_z ========================
 
-    let f_z = DensePolynomial::from_coefficients_vec(h.ifft(&solution));
+    let f_z = h_interpolate(&solution);
+
+    // ================== Committing to f_a, f_b, f_c, f_0, f_w ==================
+
+    let labeled_polynomials_1 = label_polynomials(&[
+        ("f_a", &f_a),
+        ("f_b", &f_b),
+        ("f_c", &f_c),
+        ("f_0", &f_0),
+        ("f_w", &f_w),
+    ]);
+
+    let (com_1, com_states_1) = PCS::commit(ck, &labeled_polynomials_1, None).unwrap();
+
+    sponge.absorb(&com_1);
 
     // ======================== Computation of g_1, g_2 ========================
-
-    // TODO commit to the first five here and absorb the commitments
 
     // Randomising polinomial through a squeezed challenge
     let r: F = sponge.squeeze_field_elements(1)[0];
 
     // Computing [1, r, r^2, ... r^(n-1)]
     let powers_of_r = powers(r, n);
-    let p_r = DensePolynomial::from_coefficients_vec(h.ifft(&powers_of_r));
+    let p_r = h_interpolate(&powers_of_r);
 
-    let q_ar = random_matrix_polynomial(&a, &powers_of_r, &h);
-    let q_br = random_matrix_polynomial(&b, &powers_of_r, &h);
-    let q_cr = random_matrix_polynomial(&c, &powers_of_r, &h);
+    let q_ar = h_interpolate(&random_matrix_polynomial_evaluations(&a, &powers_of_r));
+    let q_br = h_interpolate(&random_matrix_polynomial_evaluations(&b, &powers_of_r));
+    let q_cr = h_interpolate(&random_matrix_polynomial_evaluations(&c, &powers_of_r));
 
     let r_pow_n = r * powers_of_r[n - 1];
 
@@ -282,38 +302,26 @@ where
         F::ONE,
     )])) * &u;
 
-    //======================== PCS commitment/proof ========================
+    //==================== Committing to g_1, g_2 ====================
 
-    let labeled_poly_map = vec![
-        ("f_a", f_a),
-        ("f_b", f_b),
-        ("f_c", f_c),
-        ("f_0", f_0),
-        ("f_w", f_w),
-        ("g_1", g_1),
-        ("g_2", g_2),
-    ]
-    .iter()
-    .cloned()
-    .collect::<HashMap<_, _>>();
+    let labeled_polynomials_2 = label_polynomials(&[("g_1", &g_1), ("g_2", &g_2)]);
 
-    let labeled_polynomials = labeled_poly_map
-        .iter()
-        .map(|(label, polynomial)| {
-            LabeledPolynomial::new(label.to_string(), polynomial.clone(), None, None)
-        })
-        .collect::<Vec<_>>();
+    let (com_2, com_states_2) = PCS::commit(ck, &labeled_polynomials_2, None).unwrap();
 
-    let (com, com_states) = PCS::commit(ck, &labeled_polynomials, None).unwrap();
+    sponge.absorb(&com_2);
 
-    sponge.absorb(&com);
+    let coms = [com_1, com_2].concat();
+    let com_states = [com_states_1, com_states_2].concat();
+    let labeled_polynomials = [labeled_polynomials_1, labeled_polynomials_2].concat();
+
+    //======================== PCS proof ========================
 
     let a_point: F = sponge.squeeze_field_elements(1)[0];
 
     let proof = PCS::open(
         ck,
         &labeled_polynomials,
-        &com,
+        &coms,
         &a_point,
         sponge,
         &com_states,
@@ -321,14 +329,14 @@ where
     )
     .unwrap();
 
-    return AuroraProof {
-        commitments: com,
+    AuroraProof {
+        commitments: coms,
         proof,
-        evals: labeled_poly_map
+        evals: labeled_polynomials
             .iter()
-            .map(|(label, polynomial)| (label.to_string(), polynomial.evaluate(&a_point)))
-            .collect::<HashMap<_, _>>(),
-    };
+            .map(|lp| (lp.label().clone(), lp.polynomial().evaluate(&a_point)))
+            .collect(),
+    }
 }
 
 fn aurora_verify<F, PCS>(
@@ -359,10 +367,6 @@ where
         ..
     } = matrices;
 
-    let r: F = sponge.squeeze_field_elements(1)[0];
-
-    // ======================== Verify the proof ========================
-
     let AuroraProof {
         commitments: com,
         proof,
@@ -375,7 +379,15 @@ where
         .map(|c| *evals.get(c.label()).unwrap())
         .collect::<Vec<_>>();
 
-    sponge.absorb(&com);
+    // Absorb the first 5 commitments
+    sponge.absorb(&com.iter().take(5).collect::<Vec<_>>());
+
+    let r: F = sponge.squeeze_field_elements(1)[0];
+
+    // ======================== Verify the proof ========================
+
+    // Absorb the missing commitments to g1, g2
+    sponge.absorb(&com.iter().skip(5).collect::<Vec<_>>());
 
     let a_point: F = sponge.squeeze_field_elements(1)[0];
 
@@ -388,7 +400,7 @@ where
 
     let h = GeneralEvaluationDomain::<F>::new(n).unwrap();
 
-    let v_h_a = a_point.pow([n as u64]) - F::ONE;
+    let v_h_a = h.evaluate_vanishing_polynomial(a_point);
 
     if *evals.get("f_a").unwrap() * *evals.get("f_b").unwrap() - evals.get("f_c").unwrap()
         != *evals.get("f_0").unwrap() * v_h_a
@@ -403,16 +415,11 @@ where
     ]
     .concat();
 
-    let v_star = DensePolynomial::from_coefficients_vec(h.ifft(&zero_padded_instance));
+    let lagrange_basis_evals = h.evaluate_all_lagrange_coefficients(a_point);
 
-    // TODO is there a better way to compute
-    // - v_star(a_point)?
-    // - p_r(a_point)?
-    // - q_ar(a_point)?
-    // - q_br(a_point)?
-    // - q_cr(a_point)?
-    // - v_h(a_point)?
-    // f_0 = (f_a * f_b - f_c) / v_h
+    let h_evaluate = |evals: &Vec<F>| inner_product(&evals, &lagrange_basis_evals);
+
+    let v_star_a = h_evaluate(&zero_padded_instance);
 
     let v_h_in_a: F = h
         .elements()
@@ -420,15 +427,15 @@ where
         .map(|c| a_point - c)
         .product();
 
-    let f_z_a = *evals.get("f_w").unwrap() * v_h_in_a + v_star.evaluate(&a_point);
+    let f_z_a = *evals.get("f_w").unwrap() * v_h_in_a + v_star_a;
 
     // Computing [1, r, r^2, ... r^(n-1)]
     let powers_of_r = powers(r, n);
-    let p_r_a = DensePolynomial::from_coefficients_vec(h.ifft(&powers_of_r)).evaluate(&a_point);
+    let p_r_a = h_evaluate(&powers_of_r);
 
-    let q_ar_a = random_matrix_polynomial(&a, &powers_of_r, &h).evaluate(&a_point);
-    let q_br_a = random_matrix_polynomial(&b, &powers_of_r, &h).evaluate(&a_point);
-    let q_cr_a = random_matrix_polynomial(&c, &powers_of_r, &h).evaluate(&a_point);
+    let q_ar_a = h_evaluate(&random_matrix_polynomial_evaluations(&a, &powers_of_r));
+    let q_br_a = h_evaluate(&random_matrix_polynomial_evaluations(&b, &powers_of_r));
+    let q_cr_a = h_evaluate(&random_matrix_polynomial_evaluations(&c, &powers_of_r));
 
     let r_pow_n = r * powers_of_r[n - 1];
 
@@ -437,4 +444,8 @@ where
         + (p_r_a * evals.get("f_c").unwrap() - q_cr_a * f_z_a) * (r_pow_n * r_pow_n);
 
     u_a == *evals.get("g_1").unwrap() * v_h_a + *evals.get("g_2").unwrap() * a_point
+}
+
+fn inner_product<F: PrimeField>(v1: &[F], v2: &[F]) -> F {
+    v1.iter().zip(v2).map(|(li, ri)| *li * ri).sum()
 }
