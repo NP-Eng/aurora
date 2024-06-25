@@ -1,3 +1,4 @@
+use super::AuroraR1CS;
 use crate::{aurora::pad_r1cs, reader::read_constraint_system, TEST_DATA_PATH};
 use ark_bn254::Fr;
 use ark_crypto_primitives::sponge::poseidon::PoseidonSponge;
@@ -5,8 +6,6 @@ use ark_ff::{Field, PrimeField};
 use ark_poly::{EvaluationDomain, GeneralEvaluationDomain};
 use ark_poly_commit::{test_sponge, TestUVLigero};
 use ark_std::{test_rng, vec};
-
-use super::*;
 
 fn to_sparse<F: PrimeField + From<i64>>(matrix: &Vec<Vec<i64>>) -> Vec<Vec<(F, usize)>> {
     matrix
@@ -52,7 +51,7 @@ fn test_pad() {
 
     let mut padded_r1cs = r1cs.clone();
 
-    pad_r1cs(&mut padded_r1cs);
+    pad_r1cs::<Fr>(&mut padded_r1cs);
 
     println!(
         "Instance length {} -> {}",
@@ -200,25 +199,18 @@ fn test_prove() {
         Fr::from(17),
         Fr::from(289),
     ];
-    r1cs.witness_assignment = vec![sol_c, sol_a2c];
-
-    assert!(r1cs.is_satisfied().unwrap());
-
-    let mut padded_r1cs = r1cs.clone();
-
-    pad_r1cs(&mut padded_r1cs);
+    let witness_assignment = vec![sol_c, sol_a2c];
 
     let sponge: PoseidonSponge<Fr> = test_sponge();
 
-    let (ck, vk) = aurora_setup::<Fr, TestUVLigero<Fr>>(&padded_r1cs, &mut test_rng()).unwrap();
+    let mut aurora_r1cs = AuroraR1CS { r1cs: r1cs.clone() };
+
+    let (ck, vk) = aurora_r1cs
+        .setup::<TestUVLigero<Fr>>(&mut test_rng())
+        .unwrap();
 
     let aurora_proof =
-        aurora_prove::<Fr, TestUVLigero<Fr>>(&ck, &vk, &padded_r1cs, &mut sponge.clone());
+        aurora_r1cs.prove::<TestUVLigero<Fr>>(witness_assignment, &ck, &vk, &mut sponge.clone());
 
-    assert!(aurora_verify::<Fr, TestUVLigero<Fr>>(
-        &vk,
-        aurora_proof,
-        &padded_r1cs,
-        &mut sponge.clone()
-    ));
+    assert!(aurora_r1cs.verify::<TestUVLigero<Fr>>(&vk, aurora_proof, &mut sponge.clone()));
 }

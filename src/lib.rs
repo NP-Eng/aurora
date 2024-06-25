@@ -1,6 +1,7 @@
 mod aurora;
+pub use aurora::AuroraR1CS;
+
 mod reader;
-mod utils;
 
 #[cfg(test)]
 macro_rules! TEST_DATA_PATH {
