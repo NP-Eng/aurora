@@ -1,9 +1,9 @@
-use ark_std::{collections::HashMap, log2, rand::RngCore};
+use ark_std::{log2, rand::RngCore};
 
 use ark_crypto_primitives::sponge::{Absorb, CryptographicSponge};
 use ark_ff::PrimeField;
 use ark_poly::{
-    univariate::{DenseOrSparsePolynomial, DensePolynomial, SparsePolynomial},
+    univariate::{DensePolynomial, SparsePolynomial},
     DenseUVPolynomial, EvaluationDomain, GeneralEvaluationDomain, Polynomial,
 };
 use ark_poly_commit::{LabeledCommitment, LabeledPolynomial, PolynomialCommitment};
@@ -22,7 +22,7 @@ where
 {
     commitments: Vec<LabeledCommitment<PCS::Commitment>>,
     proof: PCS::Proof,
-    evals: HashMap<String, F>,
+    evals: Vec<F>,
 }
 
 pub(crate) fn is_padded<F: PrimeField>(r1cs: &ConstraintSystem<F>) -> bool {
@@ -121,8 +121,6 @@ fn absorb_matrix<F: PrimeField + Absorb>(
     sponge: &mut impl CryptographicSponge,
     label: &str,
 ) {
-    // TODO If generated matrices are not deterministically ordered in the
-    // future, sort them from left to right sort them here
     sponge.absorb(&label.as_bytes());
 
     // Implementing domain separation to prevent collisions e.g. of the matrices
@@ -236,6 +234,8 @@ where
     ]
     .concat();
 
+    // Return the unique polynomial of degree < n that interpolates the given
+    // values over h
     let h_interpolate = |evals: &Vec<F>| DensePolynomial::from_coefficients_vec(h.ifft(&evals));
 
     // Numerator
@@ -334,7 +334,7 @@ where
         proof,
         evals: labeled_polynomials
             .iter()
-            .map(|lp| (lp.label().clone(), lp.polynomial().evaluate(&a_point)))
+            .map(|lp| lp.polynomial().evaluate(&a_point))
             .collect(),
     }
 }
@@ -373,12 +373,6 @@ where
         evals,
     } = aurora_proof;
 
-    // Fetch the evaluations of the committed polynomials in the correct order
-    let values = com
-        .iter()
-        .map(|c| *evals.get(c.label()).unwrap())
-        .collect::<Vec<_>>();
-
     // Absorb the first 5 commitments
     sponge.absorb(&com.iter().take(5).collect::<Vec<_>>());
 
@@ -391,8 +385,7 @@ where
 
     let a_point: F = sponge.squeeze_field_elements(1)[0];
 
-    // TODO make sure this is safe
-    if !PCS::check(vk, &com, &a_point, values, &proof, sponge, None).unwrap() {
+    if !PCS::check(vk, &com, &a_point, evals.clone(), &proof, sponge, None).unwrap() {
         return false;
     }
 
@@ -402,9 +395,12 @@ where
 
     let v_h_a = h.evaluate_vanishing_polynomial(a_point);
 
-    if *evals.get("f_a").unwrap() * *evals.get("f_b").unwrap() - evals.get("f_c").unwrap()
-        != *evals.get("f_0").unwrap() * v_h_a
-    {
+    // Evaluations of the committed polynomials at a_point
+    let [f_a_a, f_b_a, f_c_a, f_0_a, f_w_a, g_1_a, g_2_a] = evals[..] else {
+        return false;
+    };
+
+    if f_a_a * f_b_a - f_c_a != f_0_a * v_h_a {
         return false;
     }
 
@@ -417,9 +413,14 @@ where
 
     let lagrange_basis_evals = h.evaluate_all_lagrange_coefficients(a_point);
 
-    let h_evaluate = |evals: &Vec<F>| inner_product(&evals, &lagrange_basis_evals);
+    // Returns f(a_point), where f is the unique polynomial of degree < n that
+    // interpolates the given values over h. This requires
+    //  - a one-time evaluation of the Lagrange basis over h at a_point
+    //    (lagrange_basis_evals), which is amortised over all calls
+    //  - a one-time inner product of size n per call.
+    let h_evaluate_interpolator = |evals: &Vec<F>| inner_product(&evals, &lagrange_basis_evals);
 
-    let v_star_a = h_evaluate(&zero_padded_instance);
+    let v_star_a = h_evaluate_interpolator(&zero_padded_instance);
 
     let v_h_in_a: F = h
         .elements()
@@ -427,23 +428,23 @@ where
         .map(|c| a_point - c)
         .product();
 
-    let f_z_a = *evals.get("f_w").unwrap() * v_h_in_a + v_star_a;
+    let f_z_a = f_w_a * v_h_in_a + v_star_a;
 
     // Computing [1, r, r^2, ... r^(n-1)]
     let powers_of_r = powers(r, n);
-    let p_r_a = h_evaluate(&powers_of_r);
+    let p_r_a = h_evaluate_interpolator(&powers_of_r);
 
-    let q_ar_a = h_evaluate(&random_matrix_polynomial_evaluations(&a, &powers_of_r));
-    let q_br_a = h_evaluate(&random_matrix_polynomial_evaluations(&b, &powers_of_r));
-    let q_cr_a = h_evaluate(&random_matrix_polynomial_evaluations(&c, &powers_of_r));
+    let q_ar_a = h_evaluate_interpolator(&random_matrix_polynomial_evaluations(&a, &powers_of_r));
+    let q_br_a = h_evaluate_interpolator(&random_matrix_polynomial_evaluations(&b, &powers_of_r));
+    let q_cr_a = h_evaluate_interpolator(&random_matrix_polynomial_evaluations(&c, &powers_of_r));
 
     let r_pow_n = r * powers_of_r[n - 1];
 
-    let u_a = (p_r_a * evals.get("f_a").unwrap() - q_ar_a * f_z_a)
-        + (p_r_a * evals.get("f_b").unwrap() - q_br_a * f_z_a) * r_pow_n
-        + (p_r_a * evals.get("f_c").unwrap() - q_cr_a * f_z_a) * (r_pow_n * r_pow_n);
+    let u_a = (p_r_a * f_a_a - q_ar_a * f_z_a)
+        + (p_r_a * f_b_a - q_br_a * f_z_a) * r_pow_n
+        + (p_r_a * f_c_a - q_cr_a * f_z_a) * (r_pow_n * r_pow_n);
 
-    u_a == *evals.get("g_1").unwrap() * v_h_a + *evals.get("g_2").unwrap() * a_point
+    u_a == g_1_a * v_h_a + g_2_a * a_point
 }
 
 fn inner_product<F: PrimeField>(v1: &[F], v2: &[F]) -> F {
