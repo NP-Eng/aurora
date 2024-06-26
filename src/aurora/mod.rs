@@ -8,11 +8,13 @@ use ark_poly::{
 };
 use ark_poly_commit::{LabeledCommitment, PolynomialCommitment};
 use ark_relations::r1cs::{ConstraintMatrices, ConstraintSystem};
+use error::AuroraError;
 use utils::*;
 
 #[cfg(test)]
 mod tests;
 
+mod error;
 mod utils;
 
 pub struct AuroraProof<F, PCS>
@@ -30,6 +32,7 @@ where
     F: PrimeField + Absorb,
 {
     r1cs: ConstraintSystem<F>,
+    unpadded_num_witness_variables: usize,
 }
 
 impl<F> AuroraR1CS<F>
@@ -37,12 +40,16 @@ where
     F: PrimeField + Absorb,
 {
     pub fn setup<PCS: PolynomialCommitment<F, DensePolynomial<F>>>(
-        &mut self,
+        r1cs: ConstraintSystem<F>,
         rng: &mut impl RngCore,
-    ) -> Result<(PCS::CommitterKey, PCS::VerifierKey), PCS::Error> {
-        pad_r1cs(&mut self.r1cs);
+    ) -> Result<(AuroraR1CS<F>, PCS::CommitterKey, PCS::VerifierKey), AuroraError<F, PCS>> {
+        let unpadded_num_witness_variables = r1cs.num_witness_variables;
 
-        let n = self.r1cs.num_constraints;
+        let mut r1cs = r1cs;
+
+        pad_r1cs(&mut r1cs);
+
+        let n = r1cs.num_constraints;
 
         if 1 << F::TWO_ADICITY < n {
             panic!(
@@ -52,19 +59,29 @@ where
             );
         }
 
+        let aurora_r1cs = AuroraR1CS {
+            r1cs,
+            unpadded_num_witness_variables,
+        };
+
+        // TODO make sure Ligero is enforcing the degree bound
         let pp = PCS::setup(n - 1, None, rng).unwrap();
 
         // No hiding needed, as this version of Aurora is not zero-knowledge
-        PCS::trim(&pp, n - 1, 0, Some(&[n - 1]))
+        let result = PCS::trim(&pp, n - 1, 0, Some(&[n - 1]));
+
+        result
+            .map(|(ck, vk)| (aurora_r1cs, ck, vk))
+            .map_err(|e| AuroraError::PCSError(e))
     }
 
     pub fn prove<PCS: PolynomialCommitment<F, DensePolynomial<F>>>(
         &mut self,
-        witness_assignment: Vec<F>,
+        mut witness: Vec<F>,
         ck: &PCS::CommitterKey,
         vk: &PCS::VerifierKey,
         sponge: &mut impl CryptographicSponge,
-    ) -> AuroraProof<F, PCS> {
+    ) -> Result<AuroraProof<F, PCS>, AuroraError<F, PCS>> {
         assert_padded(&self.r1cs);
 
         let matrices = self.r1cs.to_matrices().unwrap();
@@ -83,21 +100,20 @@ where
         } = matrices;
 
         // Padding the witness assignment
-        self.r1cs.witness_assignment = [
-            witness_assignment.clone(),
-            vec![F::ZERO; num_witness_variables - &witness_assignment.len()],
-        ]
-        .concat();
+        if witness.len() != self.unpadded_num_witness_variables {
+            return Err(AuroraError::IncorrectWitnessLength {
+                received: witness.len(),
+                expected: self.unpadded_num_witness_variables,
+            });
+        }
+
+        witness.resize(num_witness_variables, F::ZERO);
 
         // 1. Constructing committed polynomials
         // Following the notation of the paper
         let h = GeneralEvaluationDomain::new(n).unwrap();
 
-        let solution = [
-            self.r1cs.instance_assignment.clone(),
-            self.r1cs.witness_assignment.clone(),
-        ]
-        .concat();
+        let solution = [self.r1cs.instance_assignment.clone(), witness.clone()].concat();
 
         // ======================== Computation of f_0 ========================
 
@@ -114,11 +130,7 @@ where
 
         // ======================== Computation of f_w ========================
 
-        let zero_padded_witness = [
-            vec![F::ZERO; num_instance_variables],
-            self.r1cs.witness_assignment.clone(),
-        ]
-        .concat();
+        let zero_padded_witness = [vec![F::ZERO; num_instance_variables], witness.clone()].concat();
 
         // Return the unique polynomial of degree < n that interpolates the given
         // values over h
@@ -218,14 +230,14 @@ where
         )
         .unwrap();
 
-        AuroraProof {
+        Ok(AuroraProof {
             commitments: coms,
             proof,
             evals: labeled_polynomials
                 .iter()
                 .map(|lp| lp.evaluate(&a_point))
                 .collect(),
-        }
+        })
     }
 
     pub fn verify<PCS: PolynomialCommitment<F, DensePolynomial<F>>>(
