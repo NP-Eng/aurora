@@ -114,9 +114,7 @@ pub(crate) fn inner_product<F: PrimeField>(v1: &[F], v2: &[F]) -> F {
 
 pub(crate) fn is_padded<F: PrimeField>(r1cs: &ConstraintSystem<F>) -> bool {
     let sol_len = r1cs.num_instance_variables + r1cs.num_witness_variables;
-    r1cs.num_instance_variables.is_power_of_two()
-        && sol_len.is_power_of_two()
-        && sol_len == r1cs.num_constraints
+    sol_len.is_power_of_two() && sol_len == r1cs.num_constraints
 }
 
 pub(crate) fn assert_padded<F: PrimeField>(r1cs: &ConstraintSystem<F>) {
@@ -125,24 +123,17 @@ pub(crate) fn assert_padded<F: PrimeField>(r1cs: &ConstraintSystem<F>) {
         "Received ConstraintSystem is nod padded. Please call pad_r1cs(r1cs) first."
     );
 }
-// TODO remove padding of v
+
 pub(crate) fn pad_r1cs<F: PrimeField>(r1cs: &mut ConstraintSystem<F>) {
-    let padded_instance_len = r1cs.num_instance_variables.next_power_of_two();
-    let prepadded_sol_len = padded_instance_len + r1cs.num_witness_variables;
+    let sol_len = r1cs.num_instance_variables + r1cs.num_witness_variables;
+    let padded_len = max(sol_len, r1cs.num_constraints).next_power_of_two();
 
-    let padded_len = max(prepadded_sol_len, r1cs.num_constraints).next_power_of_two();
+    r1cs.num_instance_variables = padded_len - r1cs.num_witness_variables;
 
-    r1cs.num_instance_variables = padded_instance_len;
-    r1cs.num_witness_variables = padded_len - padded_instance_len;
-
+    // Padding instance if it was already assigned
     if !r1cs.instance_assignment.is_empty() {
         r1cs.instance_assignment
-            .resize(padded_instance_len, F::ZERO);
-    }
-
-    if !r1cs.witness_assignment.is_empty() {
-        r1cs.witness_assignment
-            .resize(r1cs.num_witness_variables, F::ZERO);
+            .resize(r1cs.num_instance_variables, F::ZERO);
     }
 
     // Padding rows

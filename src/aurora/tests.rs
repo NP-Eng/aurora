@@ -3,7 +3,6 @@ use crate::{aurora::pad_r1cs, reader::read_constraint_system, TEST_DATA_PATH};
 use ark_bn254::Fr;
 use ark_crypto_primitives::sponge::poseidon::PoseidonSponge;
 use ark_ff::{Field, PrimeField};
-use ark_poly::{EvaluationDomain, GeneralEvaluationDomain};
 use ark_poly_commit::{test_sponge, TestUVLigero};
 use ark_std::{test_rng, vec};
 
@@ -39,10 +38,9 @@ fn compare_matrices<F: PrimeField>(a: &Vec<Vec<(F, usize)>>, b: &Vec<Vec<(F, usi
 
 #[test]
 fn test_pad() {
-    // - Original instance length: 5 -> Padded to 8
-    // - Original witness length: 2 -> Padded to 8
-    // - Smallest power of 2 geq 8 + 2 -> 16
-    // - Original number of constraints: 4 -> 16
+    // - Original instance length: -> Padded to 6
+    // - Original witness length: 2
+    // - Original number of constraints: 4 -> Padded to 8
 
     let r1cs = read_constraint_system::<Fr>(
         &format!(TEST_DATA_PATH!(), "padding_test.r1cs"),
@@ -70,9 +68,9 @@ fn test_pad() {
         r1cs.num_constraints, padded_r1cs.num_constraints
     );
 
-    assert_eq!(padded_r1cs.num_instance_variables, 8);
-    assert_eq!(padded_r1cs.num_witness_variables, 8);
-    assert_eq!(padded_r1cs.num_constraints, 16);
+    assert_eq!(padded_r1cs.num_instance_variables, 6);
+    assert_eq!(padded_r1cs.num_witness_variables, 2);
+    assert_eq!(padded_r1cs.num_constraints, 8);
 
     let matrices = r1cs.to_matrices().unwrap();
 
@@ -118,54 +116,40 @@ fn test_pad() {
     // original instance- and witness-related colunns.
     let expected_padded_a = [
         vec![
-            [vec![0, -1, 0, 0, 0], vec![0; 3], vec![0, 0], vec![0; 6]].concat(),
-            [vec![0, 0, 0, -1, 0], vec![0; 3], vec![0, 0], vec![0; 6]].concat(),
-            [vec![0, 0, -1, 0, 0], vec![0; 3], vec![0, 0], vec![0; 6]].concat(),
-            [vec![0, 0, 0, 0, -1], vec![0; 3], vec![0, 0], vec![0; 6]].concat(),
+            [vec![0, -1, 0, 0, 0], vec![0], vec![0, 0]].concat(),
+            [vec![0, 0, 0, -1, 0], vec![0], vec![0, 0]].concat(),
+            [vec![0, 0, -1, 0, 0], vec![0], vec![0, 0]].concat(),
+            [vec![0, 0, 0, 0, -1], vec![0], vec![0, 0]].concat(),
         ],
-        vec![vec![0; 16]; 12],
+        vec![vec![0; 8]; 4],
     ]
     .concat();
 
     let expected_padded_b = [
         vec![
-            [vec![0, 1, 0, 0, 0], vec![0; 3], vec![0, 0], vec![0; 6]].concat(),
-            [vec![0, 0, 0, 1, 0], vec![0; 3], vec![0, 0], vec![0; 6]].concat(),
-            [vec![0, 0, 0, 0, 0], vec![0; 3], vec![1, 0], vec![0; 6]].concat(),
-            [vec![0, 0, 0, 0, 0], vec![0; 3], vec![0, 1], vec![0; 6]].concat(),
+            [vec![0, 1, 0, 0, 0], vec![0], vec![0, 0]].concat(),
+            [vec![0, 0, 0, 1, 0], vec![0], vec![0, 0]].concat(),
+            [vec![0, 0, 0, 0, 0], vec![0], vec![1, 0]].concat(),
+            [vec![0, 0, 0, 0, 0], vec![0], vec![0, 1]].concat(),
         ],
-        vec![vec![0; 16]; 12],
+        vec![vec![0; 8]; 4],
     ]
     .concat();
 
     let expected_padded_c = [
         vec![
-            [vec![0, 0, -1, 0, 0], vec![0; 3], vec![0, 0], vec![0; 6]].concat(),
-            [vec![0, 0, 0, 0, -1], vec![0; 3], vec![0, 0], vec![0; 6]].concat(),
-            [vec![0, 0, 0, 0, 0], vec![0; 3], vec![0, -1], vec![0; 6]].concat(),
-            [vec![-42, 0, 0, 0, 0], vec![0; 3], vec![0, 0], vec![0; 6]].concat(),
+            [vec![0, 0, -1, 0, 0], vec![0], vec![0, 0]].concat(),
+            [vec![0, 0, 0, 0, -1], vec![0], vec![0, 0]].concat(),
+            [vec![0, 0, 0, 0, 0], vec![0], vec![0, -1]].concat(),
+            [vec![-42, 0, 0, 0, 0], vec![0], vec![0, 0]].concat(),
         ],
-        vec![vec![0; 16]; 12],
+        vec![vec![0; 8]; 4],
     ]
     .concat();
 
     compare_matrices(&padded_matrices.a, &to_sparse(&expected_padded_a));
     compare_matrices(&padded_matrices.b, &to_sparse(&expected_padded_b));
     compare_matrices(&padded_matrices.c, &to_sparse(&expected_padded_c));
-}
-
-#[test]
-fn test_fft_consistency() {
-    let n = 1 << 8;
-    let k = 1 << 3;
-
-    let h = GeneralEvaluationDomain::<Fr>::new(n).unwrap();
-    let h_in = GeneralEvaluationDomain::<Fr>::new(k).unwrap();
-
-    assert_eq!(
-        h_in.elements().into_iter().nth(1),
-        h.elements().into_iter().nth(1 << 5)
-    );
 }
 
 #[test]
@@ -184,7 +168,7 @@ fn test_prove() {
     //  - c = 42 * (b^2 * a^2)^(-1)
     //  - a2c = 9 * c
 
-    let mut r1cs = read_constraint_system::<Fr>(
+    let r1cs = read_constraint_system::<Fr>(
         &format!(TEST_DATA_PATH!(), "padding_test.r1cs"),
         &format!(TEST_DATA_PATH!(), "padding_test.wasm"),
     );
@@ -192,7 +176,7 @@ fn test_prove() {
     // Instance: (1, a1, a2, b1, b2)
     let sol_c = Fr::from(42) * Fr::from(9 * 289).inverse().unwrap();
     let sol_a2c = Fr::from(9) * sol_c;
-    r1cs.instance_assignment = vec![
+    let instance = vec![
         Fr::ONE,
         Fr::from(3),
         Fr::from(9),
@@ -200,7 +184,7 @@ fn test_prove() {
         Fr::from(289),
     ];
 
-    let witness_assignment = vec![sol_c, sol_a2c];
+    let witness = vec![sol_c, sol_a2c];
 
     let sponge: PoseidonSponge<Fr> = test_sponge();
 
@@ -208,8 +192,16 @@ fn test_prove() {
         AuroraR1CS::setup::<TestUVLigero<Fr>>(r1cs, &mut test_rng()).unwrap();
 
     let aurora_proof = aurora_r1cs
-        .prove::<TestUVLigero<Fr>>(witness_assignment, &ck, &vk, &mut sponge.clone())
+        .prove::<TestUVLigero<Fr>>(
+            instance.clone(),
+            witness.clone(),
+            &ck,
+            &vk,
+            &mut sponge.clone(),
+        )
         .unwrap();
 
-    assert!(aurora_r1cs.verify::<TestUVLigero<Fr>>(&vk, aurora_proof, &mut sponge.clone()));
+    assert!(aurora_r1cs
+        .verify::<TestUVLigero<Fr>>(&vk, instance, aurora_proof, &mut sponge.clone())
+        .unwrap());
 }

@@ -10,7 +10,13 @@ where
     F: PrimeField,
     PCS: PolynomialCommitment<F, DensePolynomial<F>>,
 {
-    // The witness passed to `prove` does not match the (unpadded) witness
+    // The number of evaluations contained in the proof does not match the
+    // expected number
+    IncorrectNumberOfEvaluations { received: usize, expected: usize },
+    // The instance passed to `prove` does not match the instance
+    // length of the R1CS
+    IncorrectInstanceLength { received: usize, expected: usize },
+    // The witness passed to `prove` does not match the witness
     // length of the R1CS
     IncorrectWitnessLength { received: usize, expected: usize },
     // Error of the associated PCS
@@ -34,9 +40,19 @@ where
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self {
+            AuroraError::IncorrectNumberOfEvaluations { received, expected } => write!(
+                f,
+                "Incorrect number of evaluations: received {}, expected {}",
+                received, expected
+            ),
+            AuroraError::IncorrectInstanceLength { received, expected } => write!(
+                f,
+                "Incorrect (unpadded) instance length: received {}, expected {}",
+                received, expected
+            ),
             AuroraError::IncorrectWitnessLength { received, expected } => write!(
                 f,
-                "Incorrect (unpadded) witness length: received {}, expected {}",
+                "Incorrect witness length: received {}, expected {}",
                 received, expected
             ),
             AuroraError::PCSError(e) => write!(f, "{}", e),

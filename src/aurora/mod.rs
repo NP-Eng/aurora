@@ -32,7 +32,7 @@ where
     F: PrimeField + Absorb,
 {
     r1cs: ConstraintSystem<F>,
-    unpadded_num_witness_variables: usize,
+    unpadded_num_instance_variables: usize,
 }
 
 impl<F> AuroraR1CS<F>
@@ -43,7 +43,7 @@ where
         r1cs: ConstraintSystem<F>,
         rng: &mut impl RngCore,
     ) -> Result<(AuroraR1CS<F>, PCS::CommitterKey, PCS::VerifierKey), AuroraError<F, PCS>> {
-        let unpadded_num_witness_variables = r1cs.num_witness_variables;
+        let unpadded_num_instance_variables = r1cs.num_instance_variables;
 
         let mut r1cs = r1cs;
 
@@ -61,7 +61,7 @@ where
 
         let aurora_r1cs = AuroraR1CS {
             r1cs,
-            unpadded_num_witness_variables,
+            unpadded_num_instance_variables,
         };
 
         // TODO make sure Ligero is enforcing the degree bound
@@ -77,7 +77,8 @@ where
 
     pub fn prove<PCS: PolynomialCommitment<F, DensePolynomial<F>>>(
         &mut self,
-        mut witness: Vec<F>,
+        instance: Vec<F>,
+        witness: Vec<F>,
         ck: &PCS::CommitterKey,
         vk: &PCS::VerifierKey,
         sponge: &mut impl CryptographicSponge,
@@ -99,21 +100,30 @@ where
             ..
         } = matrices;
 
-        // Padding the witness assignment
-        if witness.len() != self.unpadded_num_witness_variables {
-            return Err(AuroraError::IncorrectWitnessLength {
-                received: witness.len(),
-                expected: self.unpadded_num_witness_variables,
+        // Checking instance and witness lengths
+        if instance.len() != self.unpadded_num_instance_variables {
+            return Err(AuroraError::IncorrectInstanceLength {
+                received: instance.len(),
+                expected: self.unpadded_num_instance_variables,
             });
         }
 
-        witness.resize(num_witness_variables, F::ZERO);
+        if witness.len() != num_witness_variables {
+            return Err(AuroraError::IncorrectWitnessLength {
+                received: witness.len(),
+                expected: num_witness_variables,
+            });
+        }
+
+        // Resize the instance to the padded length
+        let mut instance = instance;
+        instance.resize(num_instance_variables, F::ZERO);
 
         // 1. Constructing committed polynomials
         // Following the notation of the paper
         let h = GeneralEvaluationDomain::new(n).unwrap();
 
-        let solution = [self.r1cs.instance_assignment.clone(), witness.clone()].concat();
+        let solution = [instance.clone(), witness.clone()].concat();
 
         // ======================== Computation of f_0 ========================
 
@@ -243,9 +253,10 @@ where
     pub fn verify<PCS: PolynomialCommitment<F, DensePolynomial<F>>>(
         &self,
         vk: &PCS::VerifierKey,
+        instance: Vec<F>,
         aurora_proof: AuroraProof<F, PCS>,
         sponge: &mut impl CryptographicSponge,
-    ) -> bool {
+    ) -> Result<bool, AuroraError<F, PCS>> {
         assert_padded(&self.r1cs);
 
         let matrices = self.r1cs.to_matrices().unwrap();
@@ -269,6 +280,18 @@ where
             evals,
         } = aurora_proof;
 
+        // Checking instance and witness lengths
+        if instance.len() != self.unpadded_num_instance_variables {
+            return Err(AuroraError::IncorrectInstanceLength {
+                received: instance.len(),
+                expected: self.unpadded_num_instance_variables,
+            });
+        }
+
+        // Resize the instance to the padded length
+        let mut instance = instance;
+        instance.resize(num_instance_variables, F::ZERO);
+
         // Absorb the first 5 commitments
         sponge.absorb(&com.iter().take(5).collect::<Vec<_>>());
 
@@ -282,14 +305,17 @@ where
         let a_point: F = sponge.squeeze_field_elements(1)[0];
 
         if !PCS::check(vk, &com, &a_point, evals.clone(), &proof, sponge, None).unwrap() {
-            return false;
+            return Ok(false);
         }
 
         // ======================== Zero test ========================
 
         // Evaluations of the committed polynomials at a_point
         let [f_a_a, f_b_a, f_c_a, f_0_a, f_w_a, g_1_a, g_2_a] = evals[..] else {
-            return false;
+            return Err(AuroraError::IncorrectNumberOfEvaluations {
+                received: evals.len(),
+                expected: 7,
+            });
         };
 
         let h = GeneralEvaluationDomain::<F>::new(n).unwrap();
@@ -297,15 +323,12 @@ where
         let v_h_a = h.evaluate_vanishing_polynomial(a_point);
 
         if f_a_a * f_b_a - f_c_a != f_0_a * v_h_a {
-            return false;
+            return Ok(false);
         }
 
         // ======================== Univariate sumcheck test ========================
-        let zero_padded_instance = [
-            self.r1cs.instance_assignment.clone(),
-            vec![F::ZERO; num_witness_variables],
-        ]
-        .concat();
+        let zero_padded_instance =
+            [instance.clone(), vec![F::ZERO; num_witness_variables]].concat();
 
         let lagrange_basis_evals = h.evaluate_all_lagrange_coefficients(a_point);
 
@@ -343,6 +366,12 @@ where
             + (p_r_a * f_b_a - q_br_a * f_z_a) * r_pow_n
             + (p_r_a * f_c_a - q_cr_a * f_z_a) * (r_pow_n * r_pow_n);
 
-        u_a == g_1_a * v_h_a + g_2_a * a_point
+        Ok(u_a == g_1_a * v_h_a + g_2_a * a_point)
+    }
+
+    // Returns the internal R1CS. Note that it is padded upon calling
+    // Aurora::setup
+    pub fn r1cs(&self) -> &ConstraintSystem<F> {
+        &self.r1cs
     }
 }
