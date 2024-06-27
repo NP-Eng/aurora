@@ -3,7 +3,7 @@ use ark_std::{log2, rand::RngCore};
 use ark_crypto_primitives::sponge::{Absorb, CryptographicSponge};
 use ark_ff::PrimeField;
 use ark_poly::{
-    univariate::{DensePolynomial, SparsePolynomial},
+    univariate::DensePolynomial,
     DenseUVPolynomial, EvaluationDomain, GeneralEvaluationDomain,
 };
 use ark_poly_commit::{LabeledCommitment, PolynomialCommitment};
@@ -197,21 +197,10 @@ where
             + &(&(&p_r * &f_b) - &(&q_br * &f_z)) * r_pow_n
             + &(&(&p_r * &f_c) - &(&q_cr * &f_z)) * (r_pow_n * r_pow_n);
 
-        // We construct g_1 and g_2 such that u = v_h * g_1 + x * g_2
-
-        // Auxiliary polynomials x and x^n - 1
-        let x = DensePolynomial::from(SparsePolynomial::from_coefficients_slice(&[(1, F::ONE)]));
-
-        let x_n_minus_1 = DensePolynomial::from(SparsePolynomial::from_coefficients_slice(&[(
-            n - 1,
-            F::ONE,
-        )]));
-
-        let dividend = &x_n_minus_1 * &u;
-
-        let (quotient, g_2) = dividend.divide_by_vanishing_poly(h).unwrap();
-
-        let g_1 = &(&quotient * &x) - &u;
+        // We construct g_1 and g_2 such that u = v_h * g_1 + x * g_2 and with
+        // prescribed degree bounds
+        let (g_1, remainder) = u.divide_by_vanishing_poly(h).unwrap();
+        let g_2 = &remainder / &monomial(1);
 
         //==================== Committing to g_1, g_2 ====================
 

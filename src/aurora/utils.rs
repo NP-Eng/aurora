@@ -3,10 +3,15 @@ use std::cmp::max;
 use ark_crypto_primitives::sponge::{Absorb, CryptographicSponge};
 use ark_ff::PrimeField;
 use ark_poly::{
-    univariate::DensePolynomial, DenseUVPolynomial, EvaluationDomain, GeneralEvaluationDomain,
+    univariate::{DensePolynomial, SparsePolynomial}, DenseUVPolynomial, EvaluationDomain, GeneralEvaluationDomain
 };
 use ark_poly_commit::{LabeledPolynomial, PolynomialCommitment};
 use ark_relations::r1cs::{ConstraintMatrices, ConstraintSystem, LinearCombination, Matrix};
+
+// Returns x^n as a DensePolynomial
+pub(crate) fn monomial<F: PrimeField>(n: usize) -> DensePolynomial<F> {
+    DensePolynomial::from(SparsePolynomial::from_coefficients_vec(vec![(n, F::ONE)]))
+}
 
 pub(crate) fn sparse_matrix_by_vec<F: PrimeField>(m: &Matrix<F>, z: &Vec<F>) -> Vec<F> {
     let mut res = vec![];
@@ -23,11 +28,21 @@ pub(crate) fn sparse_matrix_by_vec<F: PrimeField>(m: &Matrix<F>, z: &Vec<F>) -> 
 pub(crate) fn powers<F: PrimeField>(r: F, n: usize) -> Vec<F> {
     let mut powers_of_r = vec![F::ONE];
     let mut last = F::ONE;
-    (0..n).for_each(|_| {
+    (0..n - 1).for_each(|_| {
         last *= r;
         powers_of_r.push(last);
     });
     powers_of_r
+}
+
+pub(crate) fn get_matrix_entry<F: PrimeField>(m: &Matrix<F>, row: usize, col: usize) -> F {
+    for (value, current_col) in m[row].iter() {
+        if *current_col == col {
+            return *value;
+        }
+    }
+
+    return F::ZERO;
 }
 
 pub(crate) fn matrix_polynomial<F: PrimeField>(
@@ -39,13 +54,16 @@ pub(crate) fn matrix_polynomial<F: PrimeField>(
     DensePolynomial::from_coefficients_vec(domain.ifft(&evals))
 }
 
+// TODO more efficient version?
 pub(crate) fn random_matrix_polynomial_evaluations<F: PrimeField>(
     m: &Matrix<F>,
     powers_of_r: &Vec<F>,
 ) -> Vec<F> {
-    m.iter()
-        .zip(powers_of_r.iter())
-        .map(|(row, r_x)| *r_x * row.iter().map(|(v, _)| v).sum::<F>())
+    let n = powers_of_r.len();
+
+    // m^t (1, r, ..., r^(n - 1)), where t denotes the transpose
+    (0..n)
+        .map(|row| (0..n).map(|col| get_matrix_entry(m, col, row) * powers_of_r[col]).sum::<F>())
         .collect::<Vec<F>>()
 }
 
