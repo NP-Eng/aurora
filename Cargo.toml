@@ -4,33 +4,19 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ark-std = { version = "^0.4.0", default-features = false }
-ark-ff = { version = "^0.4.0", default-features = false }
-ark-circom = { version = "0.1.0" }
-ark-poly = { version = "^0.4.0", default-features = false }
-ark-relations = { version = "^0.4.0", default-features = false }
-ark-crypto-primitives = { version = "^0.4.0", default-features = false, features = ["sponge"] }
-ark-ec = { version = "^0.4.0", default-features = false }
-ark-serialize = { version = "^0.4.0", default-features = false, features = ["derive"] }
-ark-poly-commit = { version = "^0.4.0", default-features = false, features = ["test-types"] }
+ark-std = { version = "0.5.0-alpha", default-features = false }
+ark-ff = { version = "0.5.0-alpha", default-features = false }
+ark-circom = { git = "https://github.com/HungryCatsStudio/circom-compat", branch = "update-0.5" }
+ark-poly = { version = "0.5.0-alpha", default-features = false }
+ark-relations = { version = "0.5.0-alpha", default-features = false }
+ark-crypto-primitives = { version = "0.5.0-alpha", default-features = false, features = ["sponge"] }
+ark-ec = { version = "0.5.0-alpha", default-features = false }
+ark-serialize = { version = "0.5.0-alpha", default-features = false, features = ["derive"] }
+ark-poly-commit = {  git = "https://github.com/HungryCatsStudio/poly-commit", branch = "release-0.5", default-features = false, features = ["test-types"] }
 itertools = "0.10.0"
 
 [dev-dependencies]
-ark-bn254 = { version = "^0.4.0", default-features = false, features = [ "curve" ] }
-
-[patch.crates-io]
-ark-std = { git = "https://github.com/arkworks-rs/std/" }
-ark-ff = { git = "https://github.com/arkworks-rs/algebra/" }
-ark-circom = { git = "https://github.com/HungryCatsStudio/circom-compat" }
-ark-relations = { git = "https://github.com/arkworks-rs/snark" }
-ark-poly = { git = "https://github.com/arkworks-rs/algebra/" }
-ark-crypto-primitives = { git = "https://github.com/arkworks-rs/crypto-primitives" }
-ark-ec = { git = "https://github.com/arkworks-rs/algebra/" }
-ark-serialize = { git = "https://github.com/arkworks-rs/algebra/" }
-ark-groth16 = { git = "https://github.com/arkworks-rs/groth16" }
-ark-poly-commit = { git = "https://github.com/HungryCatsStudio/poly-commit" }
-
-ark-bn254 = { git = "https://github.com/arkworks-rs/algebra/" }
+ark-bn254 = { version = "0.5.0-alpha", default-features = false, features = [ "curve" ] }
 
 [features]
 default = [ "std"]
