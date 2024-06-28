@@ -190,11 +190,6 @@ fn test_prove() {
 
     let (pk, vk) = AuroraR1CS::setup::<TestUVLigero<Fr>>(r1cs, &mut test_rng()).unwrap();
 
-    // pk: &AuroraProverKey<F, PCS>,
-    // instance: Vec<F>,
-    // witness: Vec<F>,
-    // pcs_vks: (&PCS::VerifierKey, &PCS::VerifierKey),
-    // sponge: &mut impl CryptographicSponge)
     let aurora_proof = AuroraR1CS::prove::<TestUVLigero<Fr>>(
         &pk,
         instance.clone(),
