@@ -188,20 +188,27 @@ fn test_prove() {
 
     let sponge: PoseidonSponge<Fr> = test_sponge();
 
-    let (mut aurora_r1cs, ck, vk) =
-        AuroraR1CS::setup::<TestUVLigero<Fr>>(r1cs, &mut test_rng()).unwrap();
+    let (pk, vk) = AuroraR1CS::setup::<TestUVLigero<Fr>>(r1cs, &mut test_rng()).unwrap();
 
-    let aurora_proof = aurora_r1cs
-        .prove::<TestUVLigero<Fr>>(
-            instance.clone(),
-            witness.clone(),
-            &ck,
-            &vk,
-            &mut sponge.clone(),
-        )
-        .unwrap();
+    // pk: &AuroraProverKey<F, PCS>,
+    // instance: Vec<F>,
+    // witness: Vec<F>,
+    // pcs_vks: (&PCS::VerifierKey, &PCS::VerifierKey),
+    // sponge: &mut impl CryptographicSponge)
+    let aurora_proof = AuroraR1CS::prove::<TestUVLigero<Fr>>(
+        &pk,
+        instance.clone(),
+        witness.clone(),
+        (&vk.vk_large, &vk.vk_small),
+        &mut sponge.clone(),
+    )
+    .unwrap();
 
-    assert!(aurora_r1cs
-        .verify::<TestUVLigero<Fr>>(&vk, instance, aurora_proof, &mut sponge.clone())
-        .unwrap());
+    assert!(AuroraR1CS::verify::<TestUVLigero<Fr>>(
+        &vk,
+        instance,
+        aurora_proof,
+        &mut sponge.clone()
+    )
+    .unwrap());
 }

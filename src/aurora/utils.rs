@@ -3,7 +3,8 @@ use std::cmp::max;
 use ark_crypto_primitives::sponge::{Absorb, CryptographicSponge};
 use ark_ff::PrimeField;
 use ark_poly::{
-    univariate::{DensePolynomial, SparsePolynomial}, DenseUVPolynomial, EvaluationDomain, GeneralEvaluationDomain
+    univariate::{DensePolynomial, SparsePolynomial},
+    DenseUVPolynomial, EvaluationDomain, GeneralEvaluationDomain,
 };
 use ark_poly_commit::{LabeledPolynomial, PolynomialCommitment};
 use ark_relations::r1cs::{ConstraintMatrices, ConstraintSystem, LinearCombination, Matrix};
@@ -63,7 +64,11 @@ pub(crate) fn random_matrix_polynomial_evaluations<F: PrimeField>(
 
     // m^t (1, r, ..., r^(n - 1)), where t denotes the transpose
     (0..n)
-        .map(|row| (0..n).map(|col| get_matrix_entry(m, col, row) * powers_of_r[col]).sum::<F>())
+        .map(|row| {
+            (0..n)
+                .map(|col| get_matrix_entry(m, col, row) * powers_of_r[col])
+                .sum::<F>()
+        })
         .collect::<Vec<F>>()
 }
 
@@ -89,7 +94,7 @@ pub(crate) fn absorb_matrix<F: PrimeField + Absorb>(
 }
 
 pub(crate) fn absorb_public_parameters<F, PCS>(
-    vk: &PCS::VerifierKey,
+    pcs_vks: (&PCS::VerifierKey, &PCS::VerifierKey),
     matrices: &ConstraintMatrices<F>,
     sponge: &mut impl CryptographicSponge,
 ) where
@@ -106,7 +111,7 @@ pub(crate) fn absorb_public_parameters<F, PCS>(
     } = matrices;
     sponge.absorb(&"Aurora".as_bytes());
     // TODO bound PCS::VerifierKey: Absorb, implement it for Ligero
-    //    sponge.absorb(vk);
+    //    sponge.absorb(pcs_vks);
     sponge.absorb(&num_instance_variables);
     sponge.absorb(&num_witness_variables);
     absorb_matrix(&a, sponge, "A");

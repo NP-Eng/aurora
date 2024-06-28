@@ -3,8 +3,8 @@ use ark_std::{log2, rand::RngCore};
 use ark_crypto_primitives::sponge::{Absorb, CryptographicSponge};
 use ark_ff::PrimeField;
 use ark_poly::{
-    univariate::DensePolynomial,
-    DenseUVPolynomial, EvaluationDomain, GeneralEvaluationDomain,
+    univariate::DensePolynomial, DenseUVPolynomial, EvaluationDomain, GeneralEvaluationDomain,
+    Polynomial,
 };
 use ark_poly_commit::{LabeledCommitment, PolynomialCommitment};
 use ark_relations::r1cs::{ConstraintMatrices, ConstraintSystem};
@@ -22,17 +22,60 @@ where
     F: PrimeField,
     PCS: PolynomialCommitment<F, DensePolynomial<F>>,
 {
-    commitments: Vec<LabeledCommitment<PCS::Commitment>>,
-    proof: PCS::Proof,
-    evals: Vec<F>,
+    /// Commitments to f_a, f_b, f_c, f_0, f_w and g_1
+    /// These should have an enforced degree bound <= n - 1, where n is the
+    /// number of columns of the R1CS
+    large_coms: Vec<LabeledCommitment<PCS::Commitment>>,
+    /// Commitment to g_2
+    /// This should have an enforced degree bound <= n - 2
+    com_g_2: LabeledCommitment<PCS::Commitment>,
+    /// Proofs of opening for the large commitments
+    large_opening_proof: PCS::Proof,
+    /// Proof of opening for the small commitment
+    g_2_opening_proof: PCS::Proof,
+    /// Values f_a(a), f_b(a), f_c(a), f_0(a), f_w(a), g_1(a)
+    large_evals: Vec<F>,
+    /// Value g_2(a)
+    g_2_a: F,
 }
 
+#[derive(Clone)]
 pub struct AuroraR1CS<F>
 where
     F: PrimeField + Absorb,
 {
     r1cs: ConstraintSystem<F>,
-    unpadded_num_instance_variables: usize,
+    pub(crate) unpadded_num_instance_variables: usize,
+}
+
+/// Aurora prover key, containing the R1CS and PCS keys to commit
+/// to polynomials of degree <= n - 1 and <= n - 2
+pub struct AuroraProverKey<F, PCS>
+where
+    F: PrimeField + Absorb,
+    PCS: PolynomialCommitment<F, DensePolynomial<F>>,
+{
+    pub(crate) r1cs: AuroraR1CS<F>,
+    // Committer PCS key enforcing the degree bound <= n - 1, where
+    // n is the number of columns of the (padded) R1CS
+    pub(crate) ck_large: PCS::CommitterKey,
+    // Committer PCS key enforcing the degree bound <= n - 2
+    pub(crate) ck_small: PCS::CommitterKey,
+}
+
+// Aurora verifier key, containing the R1CS and PCS keys to  verify
+// commitments to polynomials of degree <= n - 1 and <= n - 2
+pub struct AuroraVerifierKey<F, PCS>
+where
+    F: PrimeField + Absorb,
+    PCS: PolynomialCommitment<F, DensePolynomial<F>>,
+{
+    pub(crate) r1cs: AuroraR1CS<F>,
+    // Verifier PCS key enforcing the degree bound <= n - 1, where n is the
+    // number of columns of the (padded) R1CS
+    pub(crate) vk_large: PCS::VerifierKey,
+    // CVerifier PCS key enforcing the degree bound <= n - 2
+    pub(crate) vk_small: PCS::VerifierKey,
 }
 
 impl<F> AuroraR1CS<F>
@@ -42,7 +85,7 @@ where
     pub fn setup<PCS: PolynomialCommitment<F, DensePolynomial<F>>>(
         r1cs: ConstraintSystem<F>,
         rng: &mut impl RngCore,
-    ) -> Result<(AuroraR1CS<F>, PCS::CommitterKey, PCS::VerifierKey), AuroraError<F, PCS>> {
+    ) -> Result<(AuroraProverKey<F, PCS>, AuroraVerifierKey<F, PCS>), AuroraError<F, PCS>> {
         let unpadded_num_instance_variables = r1cs.num_instance_variables;
 
         let mut r1cs = r1cs;
@@ -68,27 +111,51 @@ where
         let pp = PCS::setup(n - 1, None, rng).unwrap();
 
         // No hiding needed, as this version of Aurora is not zero-knowledge
-        let result = PCS::trim(&pp, n - 1, 0, Some(&[n - 1]));
+        let (ck_large, vk_large) = PCS::trim(&pp, n - 1, 0, Some(&[n - 1]))
+            .map_err(|e| AuroraError::<F, PCS>::PCSError(e))
+            .unwrap();
+        let (ck_small, vk_small) = PCS::trim(&pp, n - 2, 0, Some(&[n - 2]))
+            .map_err(|e| AuroraError::<F, PCS>::PCSError(e))
+            .unwrap();
 
-        result
-            .map(|(ck, vk)| (aurora_r1cs, ck, vk))
-            .map_err(|e| AuroraError::PCSError(e))
+        Ok((
+            AuroraProverKey {
+                r1cs: aurora_r1cs.clone(),
+                ck_large,
+                ck_small,
+            },
+            AuroraVerifierKey {
+                r1cs: aurora_r1cs.clone(),
+                vk_large,
+                vk_small,
+            },
+        ))
     }
 
     pub fn prove<PCS: PolynomialCommitment<F, DensePolynomial<F>>>(
-        &mut self,
+        pk: &AuroraProverKey<F, PCS>,
         instance: Vec<F>,
         witness: Vec<F>,
-        ck: &PCS::CommitterKey,
-        vk: &PCS::VerifierKey,
+        // In the future, consider whether this should nestead be PCS::UniversalParams
+        pcs_vks: (&PCS::VerifierKey, &PCS::VerifierKey),
         sponge: &mut impl CryptographicSponge,
     ) -> Result<AuroraProof<F, PCS>, AuroraError<F, PCS>> {
-        assert_padded(&self.r1cs);
+        let AuroraProverKey {
+            r1cs:
+                AuroraR1CS {
+                    r1cs,
+                    unpadded_num_instance_variables,
+                },
+            ck_large,
+            ck_small,
+        } = pk;
 
-        let matrices = self.r1cs.to_matrices().unwrap();
+        assert_padded(&r1cs);
+
+        let matrices = r1cs.to_matrices().unwrap();
 
         // 0. Initialising sponge with public parameters
-        absorb_public_parameters::<F, PCS>(&vk, &matrices, sponge);
+        absorb_public_parameters::<F, PCS>(pcs_vks, &matrices, sponge);
 
         let ConstraintMatrices {
             a,
@@ -101,10 +168,10 @@ where
         } = matrices;
 
         // Checking instance and witness lengths
-        if instance.len() != self.unpadded_num_instance_variables {
+        if instance.len() != *unpadded_num_instance_variables {
             return Err(AuroraError::IncorrectInstanceLength {
                 received: instance.len(),
-                expected: self.unpadded_num_instance_variables,
+                expected: *unpadded_num_instance_variables,
             });
         }
 
@@ -138,7 +205,7 @@ where
             .unwrap()
             .0;
 
-        // ======================== Computation of f_w ========================
+        // ======================== Computation of f_w and f_z ========================
 
         let zero_padded_witness = [vec![F::ZERO; num_instance_variables], witness.clone()].concat();
 
@@ -164,7 +231,7 @@ where
 
         let f_z = h_interpolate(&solution);
 
-        // ================== Committing to f_a, f_b, f_c, f_0, f_w ==================
+        // ================== Committing to f_a, f_b, f_c, f_0 and f_w ==================
 
         let labeled_polynomials_1 = label_polynomials(&[
             ("f_a", &f_a),
@@ -174,11 +241,13 @@ where
             ("f_w", &f_w),
         ]);
 
-        let (com_1, com_states_1) = PCS::commit(ck, &labeled_polynomials_1, None).unwrap();
+        // Commiting to all the polynomials with enforced degree bound <= n - 1:
+        // f_a, f_b, f_c, f_0, f_w
+        let (com_1, com_states_1) = PCS::commit(ck_large, &labeled_polynomials_1, None).unwrap();
 
         sponge.absorb(&com_1);
 
-        // ======================== Computation of g_1, g_2 ========================
+        // ======================== Computation of g_1 and g_2 ========================
 
         // Randomising polinomial through a squeezed challenge
         let r: F = sponge.squeeze_field_elements(1)[0];
@@ -202,56 +271,84 @@ where
         let (g_1, remainder) = u.divide_by_vanishing_poly(h).unwrap();
         let g_2 = &remainder / &monomial(1);
 
-        //==================== Committing to g_1, g_2 ====================
+        //==================== Committing to g_1 and g_2 ====================
 
-        let labeled_polynomials_2 = label_polynomials(&[("g_1", &g_1), ("g_2", &g_2)]);
+        let labeled_g_1 = label_polynomials(&[("g_1", &g_1)]);
+        let labeled_g_2 = label_polynomials(&[("g_2", &g_2)]);
 
-        let (com_2, com_states_2) = PCS::commit(ck, &labeled_polynomials_2, None).unwrap();
+        // ck_large, ck_small enforce the degree bound <= n - 1 and <= n - 2 for
+        // g_1 and g_2, respectively
+        let (com_g_1, g_1_com_state) = PCS::commit(&ck_large, &labeled_g_1, None).unwrap();
+        let (mut com_g_2, g_2_com_state) = PCS::commit(&ck_small, &labeled_g_2, None).unwrap();
 
-        sponge.absorb(&com_2);
+        sponge.absorb(&com_g_1);
+        sponge.absorb(&com_g_2);
 
-        let coms = [com_1, com_2].concat();
-        let com_states = [com_states_1, com_states_2].concat();
-        let labeled_polynomials = [labeled_polynomials_1, labeled_polynomials_2].concat();
+        let large_coms = [com_1, com_g_1].concat();
+        let large_com_states = [com_states_1, g_1_com_state].concat();
+        let large_labeled_polynomials = [labeled_polynomials_1, labeled_g_1].concat();
 
         //======================== PCS proof ========================
 
         let a_point: F = sponge.squeeze_field_elements(1)[0];
 
-        let proof = PCS::open(
-            ck,
-            &labeled_polynomials,
-            &coms,
+        let large_opening_proof = PCS::open(
+            &ck_large,
+            &large_labeled_polynomials,
+            &large_coms,
             &a_point,
             sponge,
-            &com_states,
+            &large_com_states,
+            None,
+        )
+        .unwrap();
+
+        let g_2_opening_proof = PCS::open(
+            &ck_small,
+            &labeled_g_2,
+            &com_g_2,
+            &a_point,
+            sponge,
+            &g_2_com_state,
             None,
         )
         .unwrap();
 
         Ok(AuroraProof {
-            commitments: coms,
-            proof,
-            evals: labeled_polynomials
+            large_coms,
+            com_g_2: com_g_2.remove(0),
+            large_opening_proof,
+            g_2_opening_proof,
+            large_evals: large_labeled_polynomials
                 .iter()
                 .map(|lp| lp.evaluate(&a_point))
                 .collect(),
+            g_2_a: g_2.evaluate(&a_point),
         })
     }
 
     pub fn verify<PCS: PolynomialCommitment<F, DensePolynomial<F>>>(
-        &self,
-        vk: &PCS::VerifierKey,
+        vk: &AuroraVerifierKey<F, PCS>,
         instance: Vec<F>,
         aurora_proof: AuroraProof<F, PCS>,
         sponge: &mut impl CryptographicSponge,
     ) -> Result<bool, AuroraError<F, PCS>> {
-        assert_padded(&self.r1cs);
+        let AuroraVerifierKey {
+            r1cs:
+                AuroraR1CS {
+                    r1cs,
+                    unpadded_num_instance_variables,
+                },
+            vk_large,
+            vk_small,
+        } = vk;
 
-        let matrices = self.r1cs.to_matrices().unwrap();
+        assert_padded(&r1cs);
+
+        let matrices = r1cs.to_matrices().unwrap();
 
         // 0. Initialising sponge with public parameters
-        absorb_public_parameters::<F, PCS>(vk, &matrices, sponge);
+        absorb_public_parameters::<F, PCS>((&vk_large, &vk_small), &matrices, sponge);
 
         let ConstraintMatrices {
             a,
@@ -264,16 +361,19 @@ where
         } = matrices;
 
         let AuroraProof {
-            commitments: com,
-            proof,
-            evals,
+            large_coms,
+            com_g_2,
+            large_opening_proof,
+            g_2_opening_proof,
+            large_evals,
+            g_2_a,
         } = aurora_proof;
 
         // Checking instance and witness lengths
-        if instance.len() != self.unpadded_num_instance_variables {
+        if instance.len() != *unpadded_num_instance_variables {
             return Err(AuroraError::IncorrectInstanceLength {
                 received: instance.len(),
-                expected: self.unpadded_num_instance_variables,
+                expected: *unpadded_num_instance_variables,
             });
         }
 
@@ -282,28 +382,53 @@ where
         instance.resize(num_instance_variables, F::ZERO);
 
         // Absorb the first 5 commitments
-        sponge.absorb(&com.iter().take(5).collect::<Vec<_>>());
+        sponge.absorb(&large_coms.iter().take(5).collect::<Vec<_>>());
 
         let r: F = sponge.squeeze_field_elements(1)[0];
 
         // ======================== Verify the proof ========================
 
         // Absorb the missing commitments to g1, g2
-        sponge.absorb(&com.iter().skip(5).collect::<Vec<_>>());
+        sponge.absorb(&large_coms.last().unwrap());
+        sponge.absorb(&com_g_2);
 
         let a_point: F = sponge.squeeze_field_elements(1)[0];
 
-        if !PCS::check(vk, &com, &a_point, evals.clone(), &proof, sponge, None).unwrap() {
+        if !PCS::check(
+            vk_large,
+            &large_coms,
+            &a_point,
+            large_evals.clone(),
+            &large_opening_proof,
+            sponge,
+            None,
+        )
+        .unwrap()
+        {
+            return Ok(false);
+        }
+
+        if !PCS::check(
+            vk_small,
+            &[com_g_2],
+            &a_point,
+            vec![g_2_a],
+            &g_2_opening_proof,
+            sponge,
+            None,
+        )
+        .unwrap()
+        {
             return Ok(false);
         }
 
         // ======================== Zero test ========================
 
         // Evaluations of the committed polynomials at a_point
-        let [f_a_a, f_b_a, f_c_a, f_0_a, f_w_a, g_1_a, g_2_a] = evals[..] else {
+        let [f_a_a, f_b_a, f_c_a, f_0_a, f_w_a, g_1_a] = large_evals[..] else {
             return Err(AuroraError::IncorrectNumberOfEvaluations {
-                received: evals.len(),
-                expected: 7,
+                received: large_evals.len(),
+                expected: 6,
             });
         };
 
