@@ -51,23 +51,6 @@ fn test_pad() {
 
     pad_r1cs::<Fr>(&mut padded_r1cs);
 
-    println!(
-        "Instance length {} -> {}",
-        r1cs.num_instance_variables, padded_r1cs.num_instance_variables
-    );
-    println!(
-        "Witness length {} -> {}",
-        r1cs.num_witness_variables, padded_r1cs.num_witness_variables
-    );
-    println!(
-        "Smallest power of 2 geq {} + {} -> {}",
-        padded_r1cs.num_instance_variables, r1cs.num_witness_variables, padded_r1cs.num_constraints
-    );
-    println!(
-        "Number of constraints: {} -> {}",
-        r1cs.num_constraints, padded_r1cs.num_constraints
-    );
-
     assert_eq!(padded_r1cs.num_instance_variables, 6);
     assert_eq!(padded_r1cs.num_witness_variables, 2);
     assert_eq!(padded_r1cs.num_constraints, 8);
