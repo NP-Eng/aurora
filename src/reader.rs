@@ -22,7 +22,6 @@ pub fn read_constraint_system<F: PrimeField>(
 mod tests {
     use ark_bn254::Fr;
     use ark_ff::Field;
-    use itertools::Itertools;
 
     use super::*;
     use crate::TEST_DATA_PATH;
