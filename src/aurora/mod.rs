@@ -136,7 +136,7 @@ where
         pk: &AuroraProverKey<F, PCS>,
         instance: Vec<F>,
         witness: Vec<F>,
-        // In the future, consider whether this should nestead be PCS::UniversalParams
+        // In the future, consider whether this should instead be PCS::UniversalParams
         pcs_vks: (&PCS::VerifierKey, &PCS::VerifierKey),
         sponge: &mut impl CryptographicSponge,
     ) -> Result<AuroraProof<F, PCS>, AuroraError<F, PCS>> {
