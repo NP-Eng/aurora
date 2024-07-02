@@ -4,17 +4,21 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ark-std = { version = "^0.4.0", default-features = false }
-ark-ff = { version = "^0.4.0", default-features = false }
-ark-circom = { version = "0.1.0" }
-ark-relations = { version = "^0.4.0", default-features = false }
+ark-std = { version = "0.5.0-alpha", default-features = false }
+ark-ff = { version = "0.5.0-alpha", default-features = false }
+ark-circom = { git = "https://github.com/HungryCatsStudio/circom-compat", branch = "update-0.5" }
+ark-poly = { version = "0.5.0-alpha", default-features = false }
+ark-relations = { version = "0.5.0-alpha", default-features = false }
+ark-crypto-primitives = { version = "0.5.0-alpha", default-features = false, features = ["sponge"] }
+ark-ec = { version = "0.5.0-alpha", default-features = false }
+ark-serialize = { version = "0.5.0-alpha", default-features = false, features = ["derive"] }
+ark-poly-commit = {  git = "https://github.com/HungryCatsStudio/poly-commit", branch = "release-0.5", default-features = false, features = ["test-types"] }
 itertools = "0.10.0"
 
 [dev-dependencies]
-ark-bn254 = { version = "^0.4.0", default-features = false }
+ark-bn254 = { version = "0.5.0-alpha", default-features = false, features = [ "curve" ] }
 
-[patch.crates-io]
-ark-std = { git = "https://github.com/arkworks-rs/std/" }
-ark-ff = { git = "https://github.com/arkworks-rs/algebra/" }
-ark-relations = { git = "https://github.com/arkworks-rs/snark" }
-ark-circom = { git = "https://github.com/HungryCatsStudio/circom-compat" }
+[features]
+default = [ "std"]
+std = [ "ark-ff/std", "ark-ec/std", "ark-poly/std", "ark-std/std", "ark-relations/std", "ark-serialize/std", "ark-crypto-primitives/std", "ark-poly-commit/std" ]
+test-types = [ "ark-poly-commit/test-types" ]
