@@ -194,7 +194,6 @@ where
 
         // ======================== Computation of f_0 ========================
 
-        // Note we can't compute f_a * f_b using an iFFT
         let f_a = matrix_polynomial(&a, &solution, &h);
         let f_b = matrix_polynomial(&b, &solution, &h);
         let f_c = matrix_polynomial(&c, &solution, &h);

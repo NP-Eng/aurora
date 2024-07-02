@@ -62,7 +62,7 @@ pub(crate) fn random_matrix_polynomial_evaluations<F: PrimeField>(
 ) -> Vec<F> {
     let n = powers_of_r.len();
 
-    // m^t (1, r, ..., r^(n - 1)), where t denotes the transpose
+    // m^t (1, r, ..., r^(n - 1))^t, where t denotes the transpose
     (0..n)
         .map(|row| {
             (0..n)
