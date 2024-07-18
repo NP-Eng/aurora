@@ -2,6 +2,11 @@
 name = "aurora"
 version = "0.1.0"
 edition = "2021"
+authors = ["HungryCatsStudio"]
+homepage = "https://www.hungrycats.studio/"
+repository = "https://github.com/HungryCatsStudio/aurora"
+categories = ["cryptography"]
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 ark-std = { version = "0.5.0-alpha", default-features = false }
