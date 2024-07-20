@@ -328,7 +328,7 @@ where
 
     pub fn verify<PCS: PolynomialCommitment<F, DensePolynomial<F>>>(
         vk: &AuroraVerifierKey<F, PCS>,
-        instance: Vec<F>,
+        instance: &Vec<F>,
         aurora_proof: AuroraProof<F, PCS>,
         sponge: &mut impl CryptographicSponge,
     ) -> Result<bool, AuroraError<F, PCS>> {
@@ -377,8 +377,8 @@ where
         }
 
         // Resize the instance to the padded length
-        let mut instance = instance;
-        instance.resize(num_instance_variables, F::ZERO);
+        let mut zero_padded_instance = instance.clone();
+        zero_padded_instance.resize(num_instance_variables + num_witness_variables, F::ZERO);
 
         // Absorb the first 5 commitments
         sponge.absorb(&large_coms.iter().take(5).collect::<Vec<_>>());
@@ -440,9 +440,6 @@ where
         }
 
         // ======================== Univariate sumcheck test ========================
-        let zero_padded_instance =
-            [instance.clone(), vec![F::ZERO; num_witness_variables]].concat();
-
         let lagrange_basis_evals = h.evaluate_all_lagrange_coefficients(a_point);
 
         // Returns f(a_point), where f is the unique polynomial of degree < n that

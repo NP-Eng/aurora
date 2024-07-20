@@ -184,7 +184,7 @@ fn test_prove() {
 
     assert!(AuroraR1CS::verify::<TestUVLigero<Fr>>(
         &vk,
-        instance,
+        &instance,
         aurora_proof,
         &mut sponge.clone()
     )
