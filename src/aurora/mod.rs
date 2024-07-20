@@ -329,7 +329,7 @@ where
     pub fn verify<PCS: PolynomialCommitment<F, DensePolynomial<F>>>(
         vk: &AuroraVerifierKey<F, PCS>,
         instance: &Vec<F>,
-        aurora_proof: AuroraProof<F, PCS>,
+        aurora_proof: &AuroraProof<F, PCS>,
         sponge: &mut impl CryptographicSponge,
     ) -> Result<bool, AuroraError<F, PCS>> {
         let AuroraVerifierKey {
@@ -395,7 +395,7 @@ where
 
         if !PCS::check(
             vk_large,
-            &large_coms,
+            large_coms,
             &a_point,
             large_evals.clone(),
             &large_opening_proof,
@@ -409,9 +409,9 @@ where
 
         if !PCS::check(
             vk_small,
-            &[com_g_2],
+            [com_g_2],
             &a_point,
-            vec![g_2_a],
+            [*g_2_a],
             &g_2_opening_proof,
             sponge,
             None,
@@ -476,7 +476,7 @@ where
             + (p_r_a * f_b_a - q_br_a * f_z_a) * r_pow_n
             + (p_r_a * f_c_a - q_cr_a * f_z_a) * (r_pow_n * r_pow_n);
 
-        Ok(u_a == g_1_a * v_h_a + g_2_a * a_point)
+        Ok(u_a == g_1_a * v_h_a + *g_2_a * a_point)
     }
 
     // Returns the internal R1CS. Note that it is padded upon calling
