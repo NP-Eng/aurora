@@ -442,7 +442,8 @@ where
         //  - a one-time evaluation of the Lagrange basis over h at a_point
         //    (lagrange_basis_evals), which is amortised over all calls
         //  - a one-time inner product of size n per call.
-        let h_evaluate_interpolator = |evals: &Vec<F>| inner_product(&evals, &lagrange_basis_evals);
+        let h_evaluate_interpolator =
+            |evals: &Vec<F>| inner_product(&evals, &lagrange_basis_evals[0..evals.len()]);
 
         let v_star_a = h_evaluate_interpolator(&instance);
 

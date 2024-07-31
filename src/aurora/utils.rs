@@ -8,6 +8,7 @@ use ark_poly::{
 };
 use ark_poly_commit::{LabeledPolynomial, PolynomialCommitment};
 use ark_relations::r1cs::{ConstraintMatrices, ConstraintSystem, LinearCombination, Matrix};
+use itertools::zip_eq;
 
 // Returns x^n as a DensePolynomial
 pub(crate) fn monomial<F: PrimeField>(n: usize) -> DensePolynomial<F> {
@@ -132,7 +133,7 @@ pub(crate) fn label_polynomials<F: PrimeField>(
 }
 
 pub(crate) fn inner_product<F: PrimeField>(v1: &[F], v2: &[F]) -> F {
-    v1.iter().zip(v2).map(|(li, ri)| *li * ri).sum()
+    zip_eq(v1.iter(), v2.iter()).map(|(li, ri)| *li * ri).sum()
 }
 
 pub(crate) fn is_padded<F: PrimeField>(r1cs: &ConstraintSystem<F>) -> bool {
